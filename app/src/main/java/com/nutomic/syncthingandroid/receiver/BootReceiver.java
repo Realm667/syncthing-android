@@ -3,15 +3,13 @@ package com.nutomic.syncthingandroid.receiver;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.os.Build;
-import androidx.preference.PreferenceManager;
 import android.util.Log;
 
 import com.nutomic.syncthingandroid.service.Constants;
-import com.nutomic.syncthingandroid.service.SyncthingRunnable;
 import com.nutomic.syncthingandroid.service.SyncthingService;
 import com.nutomic.syncthingandroid.root.RootAccess;
+import com.nutomic.syncthingandroid.util.Preference;
 import com.nutomic.syncthingandroid.util.Util;
 
 import java.lang.SecurityException;
@@ -33,7 +31,7 @@ public class BootReceiver extends BroadcastReceiver {
         }
 
         if (packageReplaced) {
-            if (getPrefUseRoot(context) && RootAccess.isRootAvailableBlocking()) {
+            if (Preference.getUseRoot(context) && RootAccess.isRootAvailableBlocking()) {
                 /**
                  * In Root mode, there will be a SyncthingNative process left running after app update.
                  */
@@ -43,7 +41,7 @@ public class BootReceiver extends BroadcastReceiver {
         }
 
         // Check if we should (re)start now.
-        if (!getPrefStartServiceOnBoot(context)) {
+        if (!Preference.getStartServiceOnBoot(context)) {
             return;
         }
 
@@ -63,15 +61,5 @@ public class BootReceiver extends BroadcastReceiver {
         else {
             context.startService(intent);
         }
-    }
-
-    private static boolean getPrefStartServiceOnBoot(Context context) {
-        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(context);
-        return sp.getBoolean(Constants.PREF_START_SERVICE_ON_BOOT, false);
-    }
-
-    private static boolean getPrefUseRoot(Context context) {
-        SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(context);
-        return sp.getBoolean(Constants.PREF_USE_ROOT, false);
     }
 }
