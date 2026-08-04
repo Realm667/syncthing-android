@@ -177,9 +177,9 @@ public class Util {
      * Look for running processes and return an array
      * containing the PIDs of found instances.
      */
-    public static List<String> getProcessPIDs(final String processName) {
+    public static List<String> getProcessPIDs(final String processName, final Boolean useRoot) {
         List<String> processPIDs = new ArrayList<String>();
-        String output = runShellCommandGetOutput("ps\n");
+        String output = runShellCommandGetOutput("ps\n", useRoot);
         if (TextUtils.isEmpty(output)) {
             Log.w(TAG, "getProcessPIDs: Failed to list processes. ps command returned empty.");
             return processPIDs;
@@ -205,15 +205,15 @@ public class Util {
     /**
      * Look for running processes and end them gracefully.
      */
-    public static void killProcess(final String processName) {
+    public static void killProcess(final String processName, final Boolean useRoot) {
         int exitCode;
-        List<String> processPIDs = getProcessPIDs(processName);
+        List<String> processPIDs = getProcessPIDs(processName, useRoot);
         if (processPIDs.isEmpty()) {
             Log.v(TAG, "killProcess: Found no running instances of [" + processName + "]");
             return;
         }
         for (String processPID : processPIDs) {
-            exitCode = runShellCommand("kill -SIGINT " + processPID + "\n");
+            exitCode = runShellCommand("kill -SIGINT " + processPID + "\n", useRoot);
             if (exitCode != 0) {
                 Log.w(TAG, "killProcess: Failed to send kill SIGINT to process [" + processPID +
                         "] exit code " + Integer.toString(exitCode));
@@ -223,7 +223,7 @@ public class Util {
         /**
          * Wait for process to end.
          */
-        while (!getProcessPIDs(processName).isEmpty()) {
+        while (!getProcessPIDs(processName, useRoot).isEmpty()) {
             SystemClock.sleep(50);
         }
         Log.d(TAG, "killProcess: No more instances of [" + processName + "] running");
