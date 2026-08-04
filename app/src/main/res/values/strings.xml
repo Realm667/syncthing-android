@@ -531,7 +531,7 @@
     <string name="behaviour_autostart_summary">Start app automatically on operating system startup.</string>
 
     <string name="use_root_title">Run Syncthing as Superuser</string>
-    <string name="use_root_summary">Running Syncthing as root allows it to write to folders Android normally restricts to be readonly accessed. Use this feature with caution.</string>
+    <string name="use_root_summary">Running Syncthing as root allows it to write to folders Android normally restricts to read-only access. Use this feature with caution.</string>
 
     <string name="allow_overwrite_files_title">Allow overwrite of existing files</string>
     <string name="allow_overwrite_files_summary">When another app shares files to one of our folders.</string>
