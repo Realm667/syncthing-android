@@ -12,11 +12,11 @@ import android.text.TextUtils;
 import android.util.Log;
 
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.preference.PreferenceManager;
 
 import com.google.common.base.Charsets;
 import com.nutomic.syncthingandroid.root.RootAccess;
 import com.nutomic.syncthingandroid.R;
+import com.nutomic.syncthingandroid.service.AppPrefs;
 import com.nutomic.syncthingandroid.service.Constants;
 
 import java.io.BufferedReader;
@@ -139,9 +139,7 @@ public class Util {
     public static boolean nativeBinaryCanWriteToPath(Context context, String absoluteFolderPath) {
         final String TOUCH_FILE_NAME = ".stwritetest";
         Boolean useRoot = false;
-        Boolean prefUseRoot = PreferenceManager.getDefaultSharedPreferences(context)
-            .getBoolean(Constants.PREF_USE_ROOT, false);
-        if (prefUseRoot && RootAccess.isRootAvailableBlocking()) {
+        if (AppPrefs.getUseRoot(context) && RootAccess.isRootAvailableBlocking()) {
             useRoot = true;
         }
 
