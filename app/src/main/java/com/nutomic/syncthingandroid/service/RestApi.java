@@ -613,7 +613,7 @@ public class RestApi {
     public void shutdown() {
         hasShutdown = true;
         executorService.shutdownNow();
-        Util.killProcess("find");
+        Util.killProcess("find", false);
         new PostRequest(mContext, mUrl, PostRequest.URI_SYSTEM_SHUTDOWN, mApiKey,
                 null, null, null);
     }
