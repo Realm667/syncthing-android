@@ -6,10 +6,10 @@ import android.content.Intent;
 import android.os.Build;
 import android.util.Log;
 
+import com.nutomic.syncthingandroid.service.AppPrefs;
 import com.nutomic.syncthingandroid.service.Constants;
 import com.nutomic.syncthingandroid.service.SyncthingService;
 import com.nutomic.syncthingandroid.root.RootAccess;
-import com.nutomic.syncthingandroid.util.Preference;
 import com.nutomic.syncthingandroid.util.Util;
 
 import java.lang.SecurityException;
@@ -31,7 +31,7 @@ public class BootReceiver extends BroadcastReceiver {
         }
 
         if (packageReplaced) {
-            if (Preference.getUseRoot(context) && RootAccess.isRootAvailableBlocking()) {
+            if (AppPrefs.getUseRoot(context) && RootAccess.isRootAvailableBlocking()) {
                 /**
                  * In Root mode, there will be a SyncthingNative process left running after app update.
                  */
@@ -41,7 +41,7 @@ public class BootReceiver extends BroadcastReceiver {
         }
 
         // Check if we should (re)start now.
-        if (!Preference.getStartServiceOnBoot(context)) {
+        if (!AppPrefs.getStartServiceOnBoot(context)) {
             return;
         }
 

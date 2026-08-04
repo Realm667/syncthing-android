@@ -52,7 +52,6 @@ import com.nutomic.syncthingandroid.model.SystemStatus;
 import com.nutomic.syncthingandroid.model.SystemVersion;
 import com.nutomic.syncthingandroid.service.Constants;
 import com.nutomic.syncthingandroid.util.FileUtils;
-import com.nutomic.syncthingandroid.util.Preference;
 import com.nutomic.syncthingandroid.util.Util;
 
 import java.io.File;
@@ -614,7 +613,7 @@ public class RestApi {
     public void shutdown() {
         hasShutdown = true;
         executorService.shutdownNow();
-        Util.killProcess("find", Preference.getUseRoot(mContext));
+        Util.killProcess("find", AppPrefs.getUseRoot(mContext));
         new PostRequest(mContext, mUrl, PostRequest.URI_SYSTEM_SHUTDOWN, mApiKey,
                 null, null, null);
     }
@@ -1253,7 +1252,7 @@ public class RestApi {
                 // Check for ".sync-conflict-YYYYMMDD-HHMMSS-DEVICEI*" files.
                 mLocalCompletion.setDiscoveredConflictFiles(
                         folderId,
-                        Util.getSyncConflictFiles(folder.path, Preference.getUseRoot(mContext))
+                        Util.getSyncConflictFiles(folder.path, AppPrefs.getUseRoot(mContext))
                 );
             }
 

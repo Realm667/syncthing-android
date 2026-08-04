@@ -19,7 +19,6 @@ import com.nutomic.syncthingandroid.util.ConfigRouter;
 import com.nutomic.syncthingandroid.util.ConfigXml;
 import com.nutomic.syncthingandroid.util.FileUtils;
 import com.nutomic.syncthingandroid.util.PermissionUtil;
-import com.nutomic.syncthingandroid.util.Preference;
 import com.nutomic.syncthingandroid.util.Util;
 
 import java.io.File;
@@ -585,7 +584,7 @@ public class SyncthingService extends Service {
          * Check if an old syncthing instance is still running.
          * This happens after an in-place app upgrade. If so, end it.
          */
-        Util.killProcess(Constants.FILENAME_SYNCTHING_BINARY, Preference.getUseRoot(this));
+        Util.killProcess(Constants.FILENAME_SYNCTHING_BINARY, AppPrefs.getUseRoot(this));
 
         // Start the syncthing binary in a separate thread.
         Thread.UncaughtExceptionHandler syncthingRunnableThreadExceptionHandler = new Thread.UncaughtExceptionHandler() {
@@ -713,7 +712,7 @@ public class SyncthingService extends Service {
         }
 
         if (mSyncthingRunnable != null) {
-            Util.killProcess(Constants.FILENAME_SYNCTHING_BINARY, Preference.getUseRoot(this));
+            Util.killProcess(Constants.FILENAME_SYNCTHING_BINARY, AppPrefs.getUseRoot(this));
             if (mSyncthingRunnableThread != null) {
                 LogV("Waiting for mSyncthingRunnableThread to finish after killProcess(Syncthing) ...");
                 try {
