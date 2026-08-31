@@ -24,6 +24,25 @@ class EsdeSharedSettingsManagerTest {
         }
     }
 
+    @Test fun categoriesCoverAllowlistAndExpandAsAtomicSelections() {
+        assertEquals(EsdeSharedSettingsCatalog.specs.toSet(), EsdeSharedSettingsCatalog.categories.flatMap { it.specs }.toSet())
+        assertEquals(EsdeSharedSettingsCatalog.categories.size, EsdeSharedSettingsCatalog.categoryById.size)
+        assertTrue(EsdeSharedSettingsCatalog.categories.all { it.summary.isNotBlank() })
+
+        val navigation = EsdeSharedSettingsCatalog.categoryById.getValue("navigation_ui")
+        val selectedNames = EsdeSharedSettingsCatalog.namesForCategories(setOf(navigation.id))
+        assertEquals(navigation.specs.mapTo(mutableSetOf()) { it.name }, selectedNames)
+        assertTrue("DisplayClock" in selectedNames)
+        assertFalse("ScraperUsernameScreenScraper" in selectedNames)
+    }
+
+    @Test fun legacySelectionsMigrateToContainingCategories() {
+        assertEquals(
+            setOf("navigation_ui", "theme"),
+            EsdeSharedSettingsCatalog.categoriesForSettingNames(setOf("DisplayClock", "Theme")),
+        )
+    }
+
     @Test fun missingSharedValuesPreserveLocalAndUnknownKeysRejectWholeProfile() {
         val fixture = fixture("<bool name=\"DisplayClock\" value=\"false\" />")
         fixture.profile.writeText("""{"schemaVersion":1,"settings":{}}""")
@@ -40,7 +59,7 @@ class EsdeSharedSettingsManagerTest {
             <bool name="DisplayClock" value="true" />
             <string name="ROMDirectory" value="/not-shared" />
         """.trimIndent())
-        val result = fixture.manager.publish(setOf("DisplayClock", "ROMDirectory"))
+        val result = fixture.manager.publish(setOf("DisplayClock", "ROMDirectory"), allowInitialize = true)
         assertFalse(result.successful)
         val profile = fixture.profile.readText()
         assertTrue(profile.contains("DisplayClock"))
@@ -59,12 +78,41 @@ class EsdeSharedSettingsManagerTest {
         assertEquals("local-theme", EsdeSettingsEditor().read(fixture.settings, setOf("Theme"))["Theme"]?.value)
     }
 
-    @Test fun firstTimeSettingsMismatchIsAConflict() {
+    @Test fun firstTimeImportAdoptsExistingSharedProfileInsteadOfDeviceDefaults() {
         val fixture = fixture("<bool name=\"DisplayClock\" value=\"false\" />")
         fixture.profile.writeText("""{"schemaVersion":1,"settings":{"DisplayClock":{"type":"bool","value":true}}}""")
         val result = fixture.manager.importSelected(setOf("DisplayClock"))
-        assertEquals(listOf("DisplayClock"), result.conflicts)
-        assertEquals("false", EsdeSettingsEditor().read(fixture.settings, setOf("DisplayClock"))["DisplayClock"]?.value)
+        assertTrue(result.successful)
+        assertEquals(1, result.applied)
+        assertEquals("true", EsdeSettingsEditor().read(fixture.settings, setOf("DisplayClock"))["DisplayClock"]?.value)
+        assertTrue(fixture.backups.walkTopDown().any { it.isFile })
+    }
+
+    @Test fun automaticPublishCannotSeedMissingProfileFromFreshDefaults() {
+        val fixture = fixture("<bool name=\"DisplayClock\" value=\"false\" />")
+        assertFalse(fixture.profile.exists())
+
+        val automatic = fixture.manager.publish(setOf("DisplayClock"))
+        assertFalse(automatic.successful)
+        assertFalse(fixture.profile.exists())
+
+        val explicit = fixture.manager.publish(setOf("DisplayClock"), allowInitialize = true)
+        assertTrue(explicit.successful)
+        assertTrue(fixture.profile.isFile)
+    }
+
+    @Test fun automaticPublishDoesNotPromoteLocalDefaultsForMissingSharedFields() {
+        val fixture = fixture("<bool name=\"DisplayClock\" value=\"false\" />")
+        fixture.profile.writeText("""{"schemaVersion":1,"settings":{}}""")
+
+        val automatic = fixture.manager.publish(setOf("DisplayClock"))
+        assertTrue(automatic.successful)
+        assertEquals(1, automatic.skipped)
+        assertFalse(fixture.profile.readText().contains("DisplayClock"))
+
+        val explicit = fixture.manager.publish(setOf("DisplayClock"), allowInitialize = true)
+        assertTrue(explicit.successful)
+        assertTrue(fixture.profile.readText().contains("DisplayClock"))
     }
 
     @Test fun importUsesSnapshotCreatesBackupAndWritesAtomically() {

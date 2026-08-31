@@ -29,7 +29,9 @@ fun SettingsGamingSharedStateScreen() {
     val context = LocalContext.current
     val service = LocalSyncthingService.current
     val preferences = remember { PreferenceManager.getDefaultSharedPreferences(context) }
-    val settings = remember { EsdeSyncSettings(preferences) }
+    val settings = remember {
+        EsdeSyncSettings(preferences).also { it.migrateSharedSettingSelectionToCategories() }
+    }
     val collectionsEnabled = rememberPreferenceState(EsdeSyncSettings.PREF_SHARED_COLLECTIONS_ENABLED, false)
     val sharedSettingsEnabled = rememberPreferenceState(EsdeSyncSettings.PREF_SHARED_SETTINGS_ENABLED, false)
     var collections by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -92,23 +94,55 @@ fun SettingsGamingSharedStateScreen() {
         item {
             SwitchPreference(
                 title = { Text("Shared ES-DE Settings") },
-                summary = { Text("Explicit opt-in. Only individually selected allowlisted values are written to a typed JSON profile; secrets and paths are forbidden.") },
+                summary = { Text("Enables category-based synchronization of explicitly allowlisted values. Secrets and device-specific paths are never included.") },
                 state = sharedSettingsEnabled,
             )
         }
-        EsdeSharedSettingsCatalog.specs.groupBy { it.category }.forEach { (category, specs) ->
-            item { Preference(title = { Text(category) }, summary = { Text("Select individual settings") }) }
-            specs.forEach { spec ->
-                item {
-                    val state = rememberPreferenceState(EsdeSyncSettings.PREF_SHARED_SETTING_PREFIX + spec.name, false)
-                    SwitchPreference(title = { Text(spec.name) }, state = state, enabled = sharedSettingsEnabled.value)
-                }
+        item {
+            Preference(
+                title = { Text("What these switches mean") },
+                summary = {
+                    Text(
+                        "Category switches only choose which settings are synchronized; they do not turn ES-DE features on or off. " +
+                            "Set the actual values in ES-DE. Publishing shares this device's current values, while importing applies the shared values.",
+                    )
+                },
+            )
+        }
+        item {
+            Preference(
+                title = { Text("Adding a new device") },
+                summary = {
+                    Text(
+                        "Wait for Syncthing to reach 100%, enable the same categories, then import or use Safe Launch. " +
+                            "On first import the existing shared profile wins over fresh device defaults. Automatic publishing cannot create a missing profile.",
+                    )
+                },
+            )
+        }
+        EsdeSharedSettingsCatalog.categories.forEach { category ->
+            item {
+                val state = rememberPreferenceState(
+                    EsdeSyncSettings.PREF_SHARED_SETTING_CATEGORY_PREFIX + category.id,
+                    false,
+                )
+                SwitchPreference(
+                    title = { Text(category.title) },
+                    summary = { Text(category.summary) },
+                    state = state,
+                    enabled = sharedSettingsEnabled.value,
+                )
             }
         }
         item {
             Preference(
-                title = { Text("Publish shared ES-DE settings") },
-                summary = { Text("Last published: ${timestamp(EsdeSyncSettings.PREF_LAST_SETTINGS_PUBLISH)}") },
+                title = { Text("Publish this device's ES-DE settings") },
+                summary = {
+                    Text(
+                        "Explicit source action: shares this device's current values and may create the first profile. " +
+                            "Do not use this first on a newly installed receiving device. Last published: ${timestamp(EsdeSyncSettings.PREF_LAST_SETTINGS_PUBLISH)}",
+                    )
+                },
                 enabled = sharedSettingsEnabled.value && settings.sharedSettingNames.isNotEmpty() && service?.esdeSyncCoordinator != null,
                 onClick = { service?.esdeSyncCoordinator?.publishSharedSettings { show(it.summary("Settings publish")) } },
             )
@@ -116,7 +150,7 @@ fun SettingsGamingSharedStateScreen() {
         item {
             Preference(
                 title = { Text("Import shared ES-DE settings now") },
-                summary = { Text("Last imported: ${timestamp(EsdeSyncSettings.PREF_LAST_SETTINGS_IMPORT)}") },
+                summary = { Text("Recommended first action on a new device. Last imported: ${timestamp(EsdeSyncSettings.PREF_LAST_SETTINGS_IMPORT)}") },
                 enabled = sharedSettingsEnabled.value && settings.sharedSettingNames.isNotEmpty() && service?.esdeSyncCoordinator != null,
                 onClick = { service?.esdeSyncCoordinator?.importSharedSettings { show(it.summary("Settings import")) } },
             )

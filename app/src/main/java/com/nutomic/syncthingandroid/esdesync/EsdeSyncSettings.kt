@@ -52,9 +52,37 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
         get() = preferences.getBoolean(PREF_SHARED_SETTINGS_ENABLED, false)
         set(value) { preferences.edit().putBoolean(PREF_SHARED_SETTINGS_ENABLED, value).apply() }
 
+    var sharedSettingCategories: Set<String>
+        get() = selectedByPrefix(PREF_SHARED_SETTING_CATEGORY_PREFIX)
+        set(value) { replaceSelectedByPrefix(PREF_SHARED_SETTING_CATEGORY_PREFIX, value) }
+
     var sharedSettingNames: Set<String>
-        get() = selectedByPrefix(PREF_SHARED_SETTING_PREFIX)
-        set(value) { replaceSelectedByPrefix(PREF_SHARED_SETTING_PREFIX, value) }
+        get() {
+            val categorySelectionExists = preferences.all.keys.any {
+                it.startsWith(PREF_SHARED_SETTING_CATEGORY_PREFIX)
+            }
+            return if (categorySelectionExists) {
+                EsdeSharedSettingsCatalog.namesForCategories(sharedSettingCategories)
+            } else {
+                selectedByPrefix(PREF_SHARED_SETTING_PREFIX)
+            }
+        }
+        set(value) {
+            removeByPrefix(PREF_SHARED_SETTING_CATEGORY_PREFIX)
+            replaceSelectedByPrefix(PREF_SHARED_SETTING_PREFIX, value)
+        }
+
+    /** Migrates the v2.1.4.5 per-setting UI to the category-only selection model. */
+    fun migrateSharedSettingSelectionToCategories() {
+        if (preferences.all.keys.any { it.startsWith(PREF_SHARED_SETTING_CATEGORY_PREFIX) }) return
+        val legacyNames = selectedByPrefix(PREF_SHARED_SETTING_PREFIX)
+        if (legacyNames.isEmpty()) return
+        val categories = EsdeSharedSettingsCatalog.categoriesForSettingNames(legacyNames)
+        val editor = preferences.edit()
+        preferences.all.keys.filter { it.startsWith(PREF_SHARED_SETTING_PREFIX) }.forEach(editor::remove)
+        categories.forEach { editor.putBoolean(PREF_SHARED_SETTING_CATEGORY_PREFIX + it, true) }
+        editor.apply()
+    }
 
     private fun selectedByPrefix(prefix: String): Set<String> = preferences.all.entries
         .filter { (key, value) -> key.startsWith(prefix) && value == true }
@@ -64,6 +92,12 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
         val editor = preferences.edit()
         preferences.all.keys.filter { it.startsWith(prefix) }.forEach(editor::remove)
         values.forEach { editor.putBoolean(prefix + it, true) }
+        editor.apply()
+    }
+
+    private fun removeByPrefix(prefix: String) {
+        val editor = preferences.edit()
+        preferences.all.keys.filter { it.startsWith(prefix) }.forEach(editor::remove)
         editor.apply()
     }
 
@@ -153,6 +187,7 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
         const val PREF_SHARED_COLLECTION_PREFIX = "esdeSync.sharedCollections.selected."
         const val PREF_SHARED_SETTINGS_ENABLED = "esdeSync.sharedSettings.enabled"
         const val PREF_SHARED_SETTING_PREFIX = "esdeSync.sharedSettings.selected."
+        const val PREF_SHARED_SETTING_CATEGORY_PREFIX = "esdeSync.sharedSettings.category."
         const val PREF_BOOTSTRAP_COMPLETE = "esdeSync.bootstrapComplete"
         const val PREF_BOOTSTRAP_PENDING_IMPORT = "esdeSync.bootstrapPendingImport"
         const val PREF_PENDING_LOCAL_CHANGES = "esdeSync.pendingLocalChanges"

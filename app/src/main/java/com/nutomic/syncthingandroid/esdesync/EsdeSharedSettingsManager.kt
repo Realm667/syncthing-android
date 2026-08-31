@@ -25,10 +25,15 @@ internal class EsdeSharedSettingsManager(
         requireInside(esdeRoot, settingsFile)
     }
 
-    fun publish(selected: Set<String>): EsdeSharedOperationResult {
+    fun publish(selected: Set<String>, allowInitialize: Boolean = false): EsdeSharedOperationResult {
         if (selected.isEmpty()) return EsdeSharedOperationResult()
         sharedConflictFiles().takeIf { it.isNotEmpty() }?.let {
             return EsdeSharedOperationResult(conflicts = it)
+        }
+        if (!sharedFile.isFile && !allowInitialize) {
+            return EsdeSharedOperationResult(
+                errors = listOf("No shared settings profile exists; automatic publishing cannot create one from device defaults"),
+            )
         }
         val errors = mutableListOf<String>()
         val conflicts = mutableListOf<String>()
@@ -58,6 +63,12 @@ internal class EsdeSharedSettingsManager(
                     return@forEach
                 }
                 val snapshot = snapshots.load("settings", name)
+                if (oldHash == null && snapshot == null && !allowInitialize) {
+                    // A missing shared field is not permission for automatic publishing to promote
+                    // this device's local default. Only the explicit source action may add it.
+                    skipped++
+                    return@forEach
+                }
                 if (oldHash != null && (snapshot == null || oldHash != snapshot.sharedHash)) {
                     conflicts += name
                     return@forEach
@@ -116,7 +127,10 @@ internal class EsdeSharedSettingsManager(
                     return@forEach
                 }
                 val snapshot = snapshots.load("settings", name)
-                if (current != null && (snapshot == null || localHash != snapshot.localHash)) {
+                // With no snapshot this device has never participated in this setting. The validated
+                // shared value is authoritative on first import, preventing fresh device defaults
+                // from becoming the source. A private backup is created before applying the value.
+                if (current != null && snapshot != null && localHash != snapshot.localHash) {
                     conflicts += name
                     return@forEach
                 }

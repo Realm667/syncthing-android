@@ -30,6 +30,13 @@ data class EsdeSettingSpec(
     }
 }
 
+data class EsdeSettingCategory(
+    val id: String,
+    val title: String,
+    val summary: String,
+    val specs: List<EsdeSettingSpec>,
+)
+
 object EsdeSharedSettingsCatalog {
     private val SAFE_THEME_VALUE = Regex("^[A-Za-z0-9._ -]{0,160}$")
     private fun bool(category: String, vararg names: String) = names.map { EsdeSettingSpec(it, "bool", category) }
@@ -70,8 +77,67 @@ object EsdeSharedSettingsCatalog {
 
     val byName: Map<String, EsdeSettingSpec> = specs.associateBy { it.name }
 
+    val categories: List<EsdeSettingCategory> = listOf(
+        category(
+            id = "collections",
+            title = "Collections",
+            summary = "Synchronizes collection grouping and enabled automatic/custom collections, plus favorites button, ordering, and star display options.",
+        ),
+        category(
+            id = "gamelist_metadata",
+            title = "Gamelist and metadata",
+            summary = "Synchronizes ROM gamelist location, emulator overrides, folder order, filters, hidden entries, MAME names, parsing, sorting, and gamelist save mode.",
+        ),
+        category(
+            id = "navigation_ui",
+            title = "Navigation and UI",
+            summary = "Synchronizes language, startup view/system, clock, overlays, help prompts, menu appearance, UI mode, navigation sounds, and quick/random navigation.",
+        ),
+        category(
+            id = "theme",
+            title = "Theme",
+            summary = "Synchronizes theme, variant, colors, font size, language, transitions, aspect ratio, and variant triggers. Themes are applied only when installed locally.",
+        ),
+        category(
+            id = "media_viewer",
+            title = "Media viewer",
+            summary = "Synchronizes media viewer help, visible media types, video continuation, stretching, blur, and scanline options.",
+        ),
+        category(
+            id = "miximage",
+            title = "Miximage",
+            summary = "Synchronizes miximage generation, overwrite and artwork inclusion options, sizing, resolution, format, scaling, rotation, and letterbox handling.",
+        ),
+        category(
+            id = "scraper_content",
+            title = "Scraper content",
+            summary = "Synchronizes which artwork and metadata types are scraped, together with scraper language, region, and region fallback. Accounts and credentials are never included.",
+        ),
+        category(
+            id = "screensaver",
+            title = "Screensaver",
+            summary = "Synchronizes screensaver type and timing, controls, favorite filtering, game information, custom slideshow images, stretching, blur, and scanlines.",
+        ),
+    )
+
+    val categoryById: Map<String, EsdeSettingCategory> = categories.associateBy { it.id }
+
+    fun namesForCategories(categoryIds: Set<String>): Set<String> = categories
+        .filter { it.id in categoryIds }
+        .flatMapTo(linkedSetOf()) { category -> category.specs.map { it.name } }
+
+    fun categoriesForSettingNames(settingNames: Set<String>): Set<String> = categories
+        .filter { category -> category.specs.any { it.name in settingNames } }
+        .mapTo(linkedSetOf()) { it.id }
+
     // Defense in depth: these can never become shared even if a future caller bypasses the UI.
     fun requireAllowed(name: String): EsdeSettingSpec = byName[name]
         ?: throw IllegalArgumentException("Unknown or forbidden ES-DE setting: $name")
+
+    private fun category(id: String, title: String, summary: String): EsdeSettingCategory {
+        val categorySpecs = specs.filter { it.category == title }
+        require(categorySpecs.isNotEmpty()) { "Shared ES-DE settings category has no allowlisted values: $title" }
+        return EsdeSettingCategory(id, title, summary, categorySpecs)
+    }
 
 }

@@ -141,7 +141,10 @@ class EsdeSyncCoordinator(
     fun publishSharedSettings(callback: (EsdeSharedOperationResult) -> Unit = {}) = sharedAction(
         timestampKey = EsdeSyncSettings.PREF_LAST_SETTINGS_PUBLISH,
         callback = callback,
-    ) { settingsManager().publish(settings.sharedSettingNames) }
+    ) {
+        // A manual click is the explicit action that may establish the very first shared profile.
+        settingsManager().publish(settings.sharedSettingNames, allowInitialize = true)
+    }
 
     fun importSharedSettings(callback: (EsdeSharedOperationResult) -> Unit = {}) = sharedAction(
         timestampKey = EsdeSyncSettings.PREF_LAST_SETTINGS_IMPORT,
@@ -183,7 +186,8 @@ class EsdeSyncCoordinator(
                     .getOrElse { EsdeSharedOperationResult(errors = listOf(it.message ?: "Publish failed")) }
             } else EsdeSharedOperationResult()
             val sharedSettings = if (settings.sharedSettingsEnabled) {
-                runCatching { settingsManager().publish(settings.sharedSettingNames) }
+                // Safe Launch must never seed a missing profile from a newly installed device's defaults.
+                runCatching { settingsManager().publish(settings.sharedSettingNames, allowInitialize = false) }
                     .getOrElse { EsdeSharedOperationResult(errors = listOf(it.message ?: "Publish failed")) }
             } else EsdeSharedOperationResult()
             if (settings.sharedCollectionsEnabled) recordSharedResult(EsdeSyncSettings.PREF_LAST_COLLECTION_PUBLISH, collections)
