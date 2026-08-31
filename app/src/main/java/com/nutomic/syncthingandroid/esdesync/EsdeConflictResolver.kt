@@ -38,23 +38,76 @@ internal class EsdeConflictResolver(
 
     fun resolve(folderRoot: File, relativePath: String, resolution: EsdeConflictResolution) {
         val files = resolveFiles(folderRoot, relativePath)
-        require(files.conflict.isFile) { "Conflict copy no longer exists" }
-        val isGamelist = files.original.name.equals("gamelist.xml", ignoreCase = true)
-        require(resolution != EsdeConflictResolution.USE_CONFLICT_COPY || !isGamelist) {
+        require(resolution != EsdeConflictResolution.USE_CONFLICT_COPY || !files.isGamelist) {
             "gamelist.xml always remains local and cannot be replaced from a conflict copy"
         }
+        preflight(listOf(files), resolution, keepGamelistsLocal = false)
+        applyResolution(listOf(files), resolution, keepGamelistsLocal = false)
+    }
 
-        val backups = EsdePrivateFileBackup(backupRoot)
-        backups.create("conflicts", files.conflict)
-        files.original.takeIf(File::isFile)?.let { backups.create("conflicts", it) }
+    /**
+     * Resolves every listed conflict as one confirmed batch. All paths and replacement payloads
+     * are validated and all backups are created before the first synchronized file is changed.
+     * gamelist.xml remains local even when conflict copies are selected for the batch.
+     */
+    fun resolveAll(
+        folderRoot: File,
+        relativePaths: List<String>,
+        resolution: EsdeConflictResolution,
+    ): Int {
+        val uniquePaths = relativePaths.distinct()
+        require(uniquePaths.isNotEmpty()) { "No conflicts selected" }
+        require(uniquePaths.size <= MAX_BATCH_FILES) { "Too many conflicts in one batch" }
+        val files = uniquePaths.map { resolveFiles(folderRoot, it) }
+        preflight(files, resolution, keepGamelistsLocal = true)
+        applyResolution(files, resolution, keepGamelistsLocal = true)
+        return files.size
+    }
 
-        if (resolution == EsdeConflictResolution.USE_CONFLICT_COPY) {
-            validateReplacement(files.conflict, files.original)
-            AtomicFileWriter.write(files.original) { output ->
-                files.conflict.inputStream().use { it.copyTo(output) }
+    private fun preflight(
+        files: List<Files>,
+        resolution: EsdeConflictResolution,
+        keepGamelistsLocal: Boolean,
+    ) {
+        files.forEach { item ->
+            require(item.conflict.isFile) { "Conflict copy no longer exists: ${item.relativePath}" }
+            val keepCurrent = resolution == EsdeConflictResolution.KEEP_CURRENT ||
+                (keepGamelistsLocal && item.isGamelist)
+            require(!keepCurrent || item.original.isFile) {
+                "Current file no longer exists: ${item.originalRelativePath}"
             }
+            if (!keepCurrent) validateReplacement(item.conflict, item.original)
         }
-        check(files.conflict.delete()) { "Could not remove the resolved conflict copy" }
+    }
+
+    private fun applyResolution(
+        files: List<Files>,
+        resolution: EsdeConflictResolution,
+        keepGamelistsLocal: Boolean,
+    ) {
+        val backups = EsdePrivateFileBackup(backupRoot)
+        files.forEach { item ->
+            // Preserve the established single-conflict backup location. Batch resolutions use
+            // path-derived buckets so equal filenames from different folders cannot collide.
+            val category = if (files.size == 1 && !keepGamelistsLocal) {
+                "conflicts"
+            } else {
+                "conflicts-${EsdeHashes.text(item.originalRelativePath).take(12)}"
+            }
+            backups.create(category, item.conflict)
+            item.original.takeIf(File::isFile)?.let { backups.create(category, it) }
+        }
+
+        files.forEach { item ->
+            val useConflict = resolution == EsdeConflictResolution.USE_CONFLICT_COPY &&
+                !(keepGamelistsLocal && item.isGamelist)
+            if (useConflict) {
+                AtomicFileWriter.write(item.original) { output ->
+                    item.conflict.inputStream().use { it.copyTo(output) }
+                }
+            }
+            check(item.conflict.delete()) { "Could not remove resolved conflict: ${item.relativePath}" }
+        }
     }
 
     private fun validateReplacement(candidate: File, original: File) {
@@ -129,7 +182,13 @@ internal class EsdeConflictResolver(
         require(originalName != conflict.name && originalName.isNotBlank()) { "Invalid conflict filename" }
         val original = File(conflict.parentFile, originalName).canonicalFile
         requireInside(root, original)
-        return Files(root, conflict, original)
+        return Files(
+            root = root,
+            conflict = conflict,
+            original = original,
+            relativePath = normalized,
+            originalRelativePath = original.relativeTo(root).path.replace('\\', '/'),
+        )
     }
 
     private fun requireInside(root: File, child: File) {
@@ -137,11 +196,20 @@ internal class EsdeConflictResolver(
         require(child.path.startsWith(prefix)) { "Conflict path escaped its folder" }
     }
 
-    private data class Files(val root: File, val conflict: File, val original: File)
+    private data class Files(
+        val root: File,
+        val conflict: File,
+        val original: File,
+        val relativePath: String,
+        val originalRelativePath: String,
+    ) {
+        val isGamelist: Boolean = original.name.equals("gamelist.xml", ignoreCase = true)
+    }
 
     companion object {
         private val CONFLICT_MARKER = Regex("\\.sync-conflict-(\\d{8})-(\\d{6})-([A-Za-z0-9]+)")
         private val DRIVE_PREFIX = Regex("^[A-Za-z]:")
         private const val MAX_SHARED_SETTINGS_BYTES = 256L * 1024L
+        private const val MAX_BATCH_FILES = 1000
     }
 }

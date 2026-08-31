@@ -49,6 +49,50 @@ class EsdeConflictResolverTest {
         assertTrue(conflict.exists())
     }
 
+    @Test fun batchUsesConflictCopiesButAlwaysKeepsLocalGamelist() {
+        val root = temporary.newFolder("folder-batch")
+        val backups = temporary.newFolder("backups-batch")
+        val save = File(root, "save.dat").apply { writeText("old-save") }
+        val saveConflict = File(root, "save.sync-conflict-20260831-191230-BAUQQTP.dat")
+            .apply { writeText("new-save") }
+        val gamelist = File(root, "gamelist.xml").apply { writeText("<gameList><game/></gameList>") }
+        val gamelistConflict = File(root, "gamelist.sync-conflict-20260831-191230-BAUQQTP.xml")
+            .apply { writeText("<gameList/>") }
+
+        val count = EsdeConflictResolver(backups).resolveAll(
+            root,
+            listOf(saveConflict.name, gamelistConflict.name),
+            EsdeConflictResolution.USE_CONFLICT_COPY,
+        )
+
+        assertEquals(2, count)
+        assertEquals("new-save", save.readText())
+        assertEquals("<gameList><game/></gameList>", gamelist.readText())
+        assertFalse(saveConflict.exists())
+        assertFalse(gamelistConflict.exists())
+        val backupContents = backups.walkTopDown().filter(File::isFile).map(File::readText).toSet()
+        assertEquals(
+            setOf("old-save", "new-save", "<gameList><game/></gameList>", "<gameList/>"),
+            backupContents,
+        )
+    }
+
+    @Test fun batchPreflightFailureLeavesEveryConflictUntouched() {
+        val root = temporary.newFolder("folder-batch-preflight")
+        val current = File(root, "first.dat").apply { writeText("current") }
+        val first = File(root, "first.sync-conflict-20260831-191230-BAUQQTP.dat").apply { writeText("first") }
+        val second = File(root, "missing.sync-conflict-20260831-191231-BAUQQTP.dat").apply { writeText("second") }
+        val resolver = EsdeConflictResolver(temporary.newFolder("backups-batch-preflight"))
+
+        runCatching {
+            resolver.resolveAll(root, listOf(first.name, second.name), EsdeConflictResolution.KEEP_CURRENT)
+        }.onSuccess { error("Expected batch preflight to reject a missing current file") }
+
+        assertEquals("current", current.readText())
+        assertTrue(first.exists())
+        assertTrue(second.exists())
+    }
+
     @Test fun traversalIsRejected() {
         val root = temporary.newFolder("folder-traversal")
         val resolver = EsdeConflictResolver(temporary.newFolder("backups-traversal"))

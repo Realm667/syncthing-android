@@ -4,18 +4,31 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.navigation3.runtime.EntryProviderScope
 import com.nutomic.syncthingandroid.R
+import com.nutomic.syncthingandroid.esdesync.EsdeInstallLaunch
+import com.nutomic.syncthingandroid.esdesync.EsdeOnlineRelease
+import com.nutomic.syncthingandroid.esdesync.EsdeOnlineUpdateManager
+import com.nutomic.syncthingandroid.esdesync.EsdeUpdateCheckResult
 import com.nutomic.syncthingandroid.service.Constants
 import com.nutomic.syncthingandroid.util.Util
+import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.zhanghai.compose.preference.Preference
 
@@ -36,6 +49,13 @@ fun SettingsAboutScreen() {
     val uriHandler = LocalUriHandler.current
     val stService = LocalSyncthingService.current
     val stServiceTick = LocalServiceUpdateTick.current
+    val updateManager = remember(context) { EsdeOnlineUpdateManager(context.cacheDir) }
+    val updateScope = rememberCoroutineScope()
+    var updateBusy by remember { mutableStateOf(false) }
+    var updateStatus by remember { mutableStateOf("Tap to check GitHub Releases for an update.") }
+    var availableRelease by remember { mutableStateOf<EsdeOnlineRelease?>(null) }
+    var downloadedApk by remember { mutableStateOf<File?>(null) }
+    var showUpdateDialog by remember { mutableStateOf(false) }
 
     val loading = stringResource(R.string.state_loading)
     val unknown = stringResource(R.string.state_unknown)
@@ -63,6 +83,54 @@ fun SettingsAboutScreen() {
             Preference(
                 title = { Text(stringResource(R.string.app_version_title)) },
                 summary = { Text(state.appVersion) },
+            )
+        }
+        item {
+            Preference(
+                title = { Text("Online update") },
+                summary = { Text(updateStatus) },
+                enabled = !updateBusy,
+                onClick = {
+                    val cachedApk = downloadedApk
+                    val release = availableRelease
+                    when {
+                        cachedApk != null -> {
+                            runCatching { updateManager.launchInstaller(context, cachedApk) }
+                                .onSuccess { launch ->
+                                    updateStatus = if (launch == EsdeInstallLaunch.STARTED) {
+                                        "Android installer opened. Confirm the update to keep all app data."
+                                    } else {
+                                        "Allow installs from SafeSync, then tap Online update again."
+                                    }
+                                }
+                                .onFailure { updateStatus = "Could not open installer: ${it.message}" }
+                        }
+                        release != null -> showUpdateDialog = true
+                        else -> updateScope.launch {
+                            val current = getAppVersion(context)?.removePrefix("v")
+                            if (current == null) {
+                                updateStatus = "Installed app version could not be read."
+                                return@launch
+                            }
+                            updateBusy = true
+                            updateStatus = "Checking GitHub Releases…"
+                            runCatching { withContext(Dispatchers.IO) { updateManager.check(current) } }
+                                .onSuccess { result ->
+                                    when (result) {
+                                        EsdeUpdateCheckResult.Current ->
+                                            updateStatus = "v$current is current. Tap to check again."
+                                        is EsdeUpdateCheckResult.Available -> {
+                                            availableRelease = result.release
+                                            updateStatus = "v${result.release.version} is available. Tap to update."
+                                            showUpdateDialog = true
+                                        }
+                                    }
+                                }
+                                .onFailure { updateStatus = "Update check failed: ${it.message}" }
+                            updateBusy = false
+                        }
+                    }
+                },
             )
         }
         item {
@@ -106,6 +174,51 @@ fun SettingsAboutScreen() {
                 onClick = { navigator.navigateTo(SettingsRoute.Licenses) },
             )
         }
+    }
+
+    val release = availableRelease
+    if (showUpdateDialog && release != null) {
+        AlertDialog(
+            onDismissRequest = { if (!updateBusy) showUpdateDialog = false },
+            title = { Text("UPDATE AVAILABLE") },
+            text = {
+                Text(
+                    "Syncthing ES-DE Safe Sync v${release.version} is available. " +
+                        "SafeSync will download the universal APK from the official Realm667 GitHub release, " +
+                        "verify its SHA-256 checksum and open Android's installer. Your app data is retained.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    enabled = !updateBusy,
+                    onClick = {
+                        updateBusy = true
+                        updateStatus = "Downloading and verifying v${release.version}…"
+                        showUpdateDialog = false
+                        updateScope.launch {
+                            runCatching { withContext(Dispatchers.IO) { updateManager.downloadVerified(release) } }
+                                .onSuccess { apk ->
+                                    downloadedApk = apk
+                                    runCatching { updateManager.launchInstaller(context, apk) }
+                                        .onSuccess { launch ->
+                                            updateStatus = if (launch == EsdeInstallLaunch.STARTED) {
+                                                "v${release.version} verified. Confirm the update in Android's installer."
+                                            } else {
+                                                "v${release.version} verified. Allow installs from SafeSync, then tap Online update again."
+                                            }
+                                        }
+                                        .onFailure { updateStatus = "Could not open installer: ${it.message}" }
+                                }
+                                .onFailure { updateStatus = "Update download failed: ${it.message}" }
+                            updateBusy = false
+                        }
+                    },
+                ) { Text("DOWNLOAD & INSTALL") }
+            },
+            dismissButton = {
+                TextButton(enabled = !updateBusy, onClick = { showUpdateDialog = false }) { Text("LATER") }
+            },
+        )
     }
 }
 

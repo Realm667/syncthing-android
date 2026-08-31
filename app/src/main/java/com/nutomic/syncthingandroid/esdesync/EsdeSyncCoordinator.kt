@@ -125,6 +125,22 @@ class EsdeSyncCoordinator(
         }
     }
 
+    fun closeEsdeAfterPlay(callback: (Boolean, String) -> Unit = { _, _ -> }) {
+        executor.execute {
+            val result = runCatching {
+                check(EsdeProcessController.stopBackgroundProcess(appContext, settings.applicationPackage)) {
+                    "ES-DE could not be closed automatically. Close ES-DE and retry."
+                }
+                settings.esdeWasLaunched = false
+                "ES-DE was closed. Reading final metadata…"
+            }
+            result.exceptionOrNull()?.let { recordError("Could not close ES-DE after play", it) }
+            mainHandler.post {
+                callback(result.isSuccess, result.getOrElse { it.message ?: "ES-DE could not be closed." })
+            }
+        }
+    }
+
     fun discoverSharedCollections(callback: (Set<String>) -> Unit) {
         executor.execute {
             val names = runCatching { collectionsManager().discover() }.getOrDefault(emptySet())

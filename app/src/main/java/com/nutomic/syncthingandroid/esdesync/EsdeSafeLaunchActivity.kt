@@ -352,7 +352,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
 
     private fun beginPostSync() {
         state = EsdeSyncState.EXPORTING_METADATA
-        statusDetail = "Reading final ES-DE metadata…"
+        statusDetail = "Closing ES-DE before reading final metadata…"
         val coordinator = service?.esdeSyncCoordinator
         if (coordinator == null) {
             state = EsdeSyncState.ERROR
@@ -360,6 +360,19 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             settings.pendingLocalChanges = true
             return
         }
+        coordinator.closeEsdeAfterPlay { closed, message ->
+            if (!closed) {
+                state = EsdeSyncState.ERROR
+                statusDetail = message
+                settings.pendingLocalChanges = true
+            } else {
+                statusDetail = message
+                exportAndSyncAfterPlay(coordinator)
+            }
+        }
+    }
+
+    private fun exportAndSyncAfterPlay(coordinator: EsdeSyncCoordinator) {
         coordinator.exportNow { _ ->
             statusDetail = "Publishing selected Shared Collections and ES-DE settings…"
             coordinator.publishSharedState { shared ->
@@ -383,7 +396,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         refreshFreshGateData { when (evaluateGate()) {
             EsdeSyncState.READY_TO_PLAY -> {
                 state = EsdeSyncState.SAFE_TO_SWITCH
-                statusDetail = "Everything is synchronized. Safe to switch device."
+                statusDetail = "ES-DE is closed and all changes are synchronized. Safe to switch device."
                 settings.pendingLocalChanges = false
                 preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_SUCCESSFUL_SYNC, System.currentTimeMillis()).apply()
                 restoreForceState()
@@ -420,13 +433,19 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     }
 
     private fun retry() {
+        val retryPostSync = postSyncStarted && settings.launchTimestamp > 0
         handler.removeCallbacksAndMessages(null)
         preSyncStarted = false
-        postSyncStarted = false
         legacyConfigurationChecked = false
         bootstrapDiscoveryAttempts = 0
-        settings.esdeWasLaunched = false
-        beginPreSync()
+        if (retryPostSync) {
+            postSyncStarted = true
+            beginPostSync()
+        } else {
+            postSyncStarted = false
+            settings.esdeWasLaunched = false
+            beginPreSync()
+        }
     }
 
     private fun resolveConflict(pending: PendingConflictResolution) {
@@ -437,26 +456,31 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             pendingConflictResolution = null
             return
         }
-        conflictFeedback = "Resolving ${pending.relativePath}…"
+        val count = pending.relativePaths.size
+        conflictFeedback = if (count == 1) "Resolving ${pending.relativePaths.single()}…"
+            else "Resolving $count conflicts…"
         conflictExecutor.execute {
             val result = runCatching {
-                EsdeConflictResolver(File(filesDir, "esde-sync/backups")).resolve(
-                    File(path),
-                    pending.relativePath,
-                    pending.resolution,
-                )
+                val resolver = EsdeConflictResolver(File(filesDir, "esde-sync/backups"))
+                if (count == 1) {
+                    resolver.resolve(File(path), pending.relativePaths.single(), pending.resolution)
+                    1
+                } else {
+                    resolver.resolveAll(File(path), pending.relativePaths, pending.resolution)
+                }
             }
             handler.post {
                 if (isFinishing) return@post
                 pendingConflictResolution = null
-                result.onSuccess {
+                result.onSuccess { resolvedCount ->
+                    val resolvedPaths = pending.relativePaths.toSet()
                     api?.getFolderStatus(pending.folderId)?.value?.let { cache ->
                         cache.discoveredConflictFiles = cache.discoveredConflictFiles
-                            .filterNot { it == pending.relativePath }
+                            .filterNot { it in resolvedPaths }
                             .toTypedArray()
                     }
                     conflictFolder = null
-                    conflictFeedback = "Conflict resolved. Both versions were backed up privately."
+                    conflictFeedback = "$resolvedCount conflict(s) resolved. All versions were backed up privately."
                     retry()
                 }.onFailure { error ->
                     conflictFeedback = "Conflict could not be resolved: ${error.message ?: "unknown error"}"
@@ -589,7 +613,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                             onClick = ::finishSession,
                             colors = ButtonDefaults.buttonColors(containerColor = SAFE_GREEN, contentColor = Color(0xFF10210E)),
                         ) { Text("DONE") }
-                        OutlinedButton(onClick = ::startAgain) { Text("START ES-DE AGAIN") }
+                        OutlinedButton(onClick = ::startAgain) { Text("START NEW SESSION") }
                     }
                     EsdeSyncState.ERROR -> {
                         OutlinedButton(onClick = ::retry) { Text("RETRY") }
@@ -640,7 +664,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 Text(currentInstruction(), color = Color(0xFFF0F0F0), style = MaterialTheme.typography.bodyLarge)
                 InstructionStep(1, "Start ES-DE from this screen.")
                 InstructionStep(2, "Play, then close the emulator and return to ES-DE.")
-                InstructionStep(3, "Press Home in ES-DE to return to SafeSync.")
+                InstructionStep(3, "Press Home in ES-DE to return; SafeSync then closes ES-DE automatically.")
                 InstructionStep(4, "Keep SafeSync open until SAFE TO SWITCH DEVICE appears.")
             }
         }
@@ -724,7 +748,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                                         conflictFolder = null
                                         pendingConflictResolution = PendingConflictResolution(
                                             health.id,
-                                            relativePath,
+                                            listOf(relativePath),
                                             EsdeConflictResolution.KEEP_CURRENT,
                                         )
                                     },
@@ -735,7 +759,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                                             conflictFolder = null
                                             pendingConflictResolution = PendingConflictResolution(
                                                 health.id,
-                                                relativePath,
+                                                listOf(relativePath),
                                                 EsdeConflictResolution.USE_CONFLICT_COPY,
                                             )
                                         },
@@ -750,6 +774,44 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                             }
                         }
                     }
+                    if (health.conflictFiles.size > 1) {
+                        HorizontalDivider(color = Color(0xFF444444))
+                        Text("BATCH ACTIONS", color = Color.White, fontWeight = FontWeight.Bold)
+                        Text(
+                            "Apply one decision to all ${health.conflictFiles.size} conflicts in this folder. All files are validated and backed up before changes begin.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Button(
+                            onClick = {
+                                conflictFolder = null
+                                pendingConflictResolution = PendingConflictResolution(
+                                    health.id,
+                                    health.conflictFiles,
+                                    EsdeConflictResolution.KEEP_CURRENT,
+                                )
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = SAFE_GREEN, contentColor = Color(0xFF10210E)),
+                        ) { Text("KEEP CURRENT FOR ALL") }
+                        Button(
+                            onClick = {
+                                conflictFolder = null
+                                pendingConflictResolution = PendingConflictResolution(
+                                    health.id,
+                                    health.conflictFiles,
+                                    EsdeConflictResolution.USE_CONFLICT_COPY,
+                                )
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = DANGER_RED, contentColor = Color.White),
+                        ) { Text("USE CONFLICT COPY FOR ALL") }
+                        if (health.conflictFiles.any(::isGamelistConflict)) {
+                            Text(
+                                "Safety exception: local gamelist.xml files are always kept, including in a batch.",
+                                color = Color(0xFFD8A657),
+                                fontStyle = FontStyle.Italic,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
                 }
             },
             confirmButton = { TextButton(onClick = { conflictFolder = null }) { Text("CLOSE") } },
@@ -759,15 +821,23 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     @Composable
     private fun ConflictConfirmationDialog(pending: PendingConflictResolution) {
         val useConflict = pending.resolution == EsdeConflictResolution.USE_CONFLICT_COPY
+        val batch = pending.relativePaths.size > 1
         AlertDialog(
             onDismissRequest = { pendingConflictResolution = null },
             title = { Text("CONFIRM CONFLICT RESOLUTION") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(pending.relativePath)
                     Text(
-                        if (useConflict) {
+                        if (batch) "${pending.relativePaths.size} conflict files"
+                        else pending.relativePaths.single(),
+                    )
+                    Text(
+                        if (useConflict && batch) {
+                            "Every conflict copy will replace its current file after validation and backup. Local gamelist.xml files are the safety exception and remain unchanged."
+                        } else if (useConflict) {
                             "The current file and conflict copy will be backed up. The conflict copy will then replace the current file."
+                        } else if (batch) {
+                            "Every conflict copy will be backed up and removed. All current local files will remain unchanged."
                         } else {
                             "The conflict copy will be backed up and removed. The current local file will remain unchanged."
                         },
@@ -782,7 +852,12 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                         containerColor = if (useConflict) DANGER_RED else SAFE_GREEN,
                         contentColor = if (useConflict) Color.White else Color(0xFF10210E),
                     ),
-                ) { Text(if (useConflict) "USE CONFLICT COPY" else "KEEP CURRENT") }
+                ) { Text(when {
+                    useConflict && batch -> "USE FOR ALL"
+                    useConflict -> "USE CONFLICT COPY"
+                    batch -> "KEEP ALL CURRENT"
+                    else -> "KEEP CURRENT"
+                }) }
             },
             dismissButton = { TextButton(onClick = { pendingConflictResolution = null }) { Text("CANCEL") } },
         )
@@ -809,7 +884,8 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             "After playing, close the emulator, return to ES-DE and press Home. Do not switch devices yet."
         EsdeSyncState.EXPORTING_METADATA, EsdeSyncState.SYNCING_AFTER_PLAY ->
             "Keep this screen open while SafeSync publishes and synchronizes your changes."
-        EsdeSyncState.SAFE_TO_SWITCH -> "All changes are synchronized. You may now switch devices or power this one off."
+        EsdeSyncState.SAFE_TO_SWITCH ->
+            "ES-DE is closed and all changes are synchronized. Start a new session, close SafeSync, or switch devices."
         EsdeSyncState.ERROR -> "Resolve the message below or retry. Do not continue on another handheld."
         EsdeSyncState.NOT_CONFIGURED -> "Complete First Setup before starting ES-DE with synchronized game data."
         else -> "Wait while SafeSync checks the primary device and prepares the latest game data."
@@ -872,7 +948,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
 
     private data class PendingConflictResolution(
         val folderId: String,
-        val relativePath: String,
+        val relativePaths: List<String>,
         val resolution: EsdeConflictResolution,
     )
 

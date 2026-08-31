@@ -214,7 +214,7 @@ fun SettingsGamingScreen() {
                 enabled = enabled.value && api != null,
             )
         }
-        item { Preference(title = { Text("Automatic gamelist.xml protection") }, summary = { Text("When folders are selected, SafeSync places the basename rule gamelist.xml first so existing include-only patterns cannot override it.") }) }
+        item { Preference(title = { Text("Automatic gamelist.xml protection") }, summary = { Text("SafeSync applies the basename rule gamelist.xml only to the selected Master / Roms sync folder, where the local system gamelists are stored. Collections, settings and save folders are not modified.") }) }
         item { GamingSectionHeader("Synchronized Content") }
         item { Preference(title = { Text("Collections & ES-DE setting categories") }, summary = { Text("Choose categories, review what each contains, and publish or import explicitly. Category switches select what is synchronized; they never toggle the ES-DE feature itself.") }, onClick = { navigator.navigateTo(SettingsRoute.GamingSharedState) }, enabled = enabled.value) }
         item { GamingSectionHeader("Safe Launch & Android") }
@@ -273,8 +273,13 @@ fun SettingsGamingScreen() {
             showFolders = false
             if (api != null && it.isNotEmpty()) EsdeIgnoreRuleManager(api).ensure(it) { result ->
                 (context as Activity).runOnUiThread {
-                    val warning = if (result.conflicting > 0) " ${result.conflicting} folder(s) need manual review." else ""
-                    Toast.makeText(context, "Protected ${result.checked} folder(s); updated ${result.updated}.$warning", Toast.LENGTH_LONG).show()
+                    val warning = if (result.conflicting > 0) " Master / Roms needs manual review." else ""
+                    val message = if (result.checked == 0) {
+                        "No selected Master / Roms folder found; no ignore list was changed."
+                    } else {
+                        "Protected Master / Roms; updated ${result.updated}.$warning"
+                    }
+                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                 }
             }
         },

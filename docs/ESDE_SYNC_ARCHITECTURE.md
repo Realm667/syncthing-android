@@ -3,9 +3,10 @@
 ## Invariants
 
 1. `gamelist.xml` is local state. It is never synchronized or merged by this
-   application. The Syncthing basename ignore rule `gamelist.xml` applies at any
-   depth and is placed before broader include rules through the existing ignore
-   REST API without discarding existing lines.
+   application. In this deployment, the Syncthing basename ignore rule
+   `gamelist.xml` applies only to the **Master / Roms** sync folder at any depth
+   and is placed before broader include rules through the existing ignore REST
+   API without discarding existing lines.
 2. Cross-device state is one JSON sidecar per ES-DE `<game><path>` beneath the
    same system's `.esde-sync` directory.
 3. Imports may change only `favorite`, `completed`, `playcount`, `playtime`,
@@ -156,7 +157,9 @@ snapshots distinguish one-sided changes from ambiguous first-time or concurrent 
 edits are reported and are not overwritten; absence from shared state never deletes local state.
 Safe Launch imports global state after the Syncthing gate and before per-game metadata and blocks on
 validation errors or conflicts unless the user consciously chooses “Start without sync”. After
-ES-DE returns, selected global state is published before the final Syncthing rescan.
+ES-DE returns, SafeSync closes the background ES-DE process and confirms that it stopped before
+reading any final files. Selected global state is then published before the final Syncthing rescan;
+only after full primary-device completion does the UI enter the idle “Safe to switch device” state.
 
 The per-game schema remains version 1 and additionally accepts optional `players` (a bounded
 single number or range such as `1-2`) and

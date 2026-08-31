@@ -1,6 +1,7 @@
 package com.nutomic.syncthingandroid.esdesync
 
 import com.google.gson.Gson
+import com.nutomic.syncthingandroid.model.Folder
 import com.nutomic.syncthingandroid.model.RemoteNeed
 import com.nutomic.syncthingandroid.model.RemoteNeedItem
 import org.junit.Assert.assertEquals
@@ -91,6 +92,27 @@ class EsdeSyncStateEvaluatorTest {
         assertEquals(1, corrected.count { it == "gamelist.xml" })
     }
 
+    @Test fun gamelistIgnoreProtectionTargetsOnlySelectedMasterRomsFolder() {
+        val folders = listOf(
+            folder("roms", "Master", "Roms"),
+            folder("collections", "Master", "ES-DE / Collections"),
+            folder("settings", "Saves & Settings", "PSX / Duckstation Patched"),
+            folder("legacy", "", "Master / Roms"),
+        )
+
+        assertEquals(
+            setOf("roms", "legacy"),
+            EsdeIgnoreRuleManager.targetFolderIds(
+                setOf("roms", "collections", "settings", "legacy"),
+                folders,
+            ),
+        )
+        assertEquals(
+            emptySet<String>(),
+            EsdeIgnoreRuleManager.targetFolderIds(setOf("collections", "settings"), folders),
+        )
+    }
+
     private fun evaluate(folder: EsdeFolderHealth, connected: Boolean = true) = EsdeSyncStateEvaluator.evaluate(
         EsdeGateInput(true, true, connected, false, listOf(folder))
     )
@@ -98,5 +120,11 @@ class EsdeSyncStateEvaluatorTest {
     private fun item(name: String, type: String) = RemoteNeedItem().apply {
         this.name = name
         this.type = type
+    }
+
+    private fun folder(id: String, group: String, label: String) = Folder().apply {
+        this.id = id
+        this.group = group
+        this.label = label
     }
 }

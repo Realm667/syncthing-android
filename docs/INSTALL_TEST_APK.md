@@ -19,6 +19,15 @@ APKs from this fork, but they are deliberately not trusted production or store
 builds. The debug APK described below has the separate `.debug` application ID
 and is not updated by a release APK.
 
+An installed release APK can also update itself from **Settings → About →
+Online update**. SafeSync checks the published Realm667 GitHub Releases,
+downloads the universal APK, verifies its exact size and the SHA-256 value from
+the release's `SHA256SUMS.txt`, and then opens Android's package installer. On
+first use Android may require **Allow from this source** for SafeSync; after
+granting it, tap **Online update** again. Android also verifies that the new APK
+has the same signing identity, and an in-place update retains app data and the
+Syncthing device identity.
+
 ## Get a signed APK from GitHub Actions
 
 1. Open the fork on GitHub and select **Actions**.
@@ -92,10 +101,13 @@ restored configuration and continues without generating a new identity.
 8. Select the QNAP as **Primary Gaming Sync Device**.
 9. Select only folders that must block launch (typically ROMs, saves, states, and
    ES-DE data).
-10. Run **Check and add gamelist.xml ignore rule**. Existing ignore lines are
-    preserved, but the basename rule is moved ahead of broader include rules
-    because Syncthing uses the first matching rule. Confirm `gamelist.xml` is
-    ignored on every participating device.
+10. Run **Check and add gamelist.xml ignore rule**. SafeSync modifies only the
+    selected **Master / Roms** sync folder, because that is where this setup
+    stores the per-system gamelists. Existing ignore lines are preserved, but
+    the basename rule is moved ahead of broader include rules because Syncthing
+    uses the first matching rule. Collections, settings and save folders remain
+    untouched. Confirm `gamelist.xml` is ignored in **Master / Roms** on every
+    participating device.
 11. If synchronized sidecars already exist, let the automatic import finish. If
     none exist anywhere and this Android device is authoritative, explicitly
     press **Use local Android gamelists as initial metadata source** exactly once.
@@ -136,7 +148,8 @@ version-1 sidecars used by the Android bridge:
 Existing sidecars are skipped. `-OverwriteExisting` is available only for an
 intentional re-bootstrap. Let Syncthing finish distributing `.esde-sync` before
 opening Safe Launch on Android. Keep `gamelist.xml` as the first effective
-ignore rule in every relevant Syncthing folder; the XML itself remains local.
+ignore rule in the **Master / Roms** Syncthing folder; the XML itself remains
+local.
 
 ## Safe first test
 

@@ -110,8 +110,12 @@ fun SettingsGamingFirstSetupScreen() {
             }
             EsdeIgnoreRuleManager(api).ensure(selectedFolders) { result ->
                 (context as Activity).runOnUiThread {
-                    feedback = "$message. Protected ${result.checked} folder(s); updated ${result.updated}." +
-                        if (result.conflicting > 0) " ${result.conflicting} folder(s) need manual ignore review." else ""
+                    feedback = if (result.checked == 0) {
+                        "$message. No selected Master / Roms folder was found; no ignore list was changed."
+                    } else {
+                        "$message. Protected Master / Roms; updated ${result.updated}." +
+                            if (result.conflicting > 0) " Its ignore list needs manual review." else ""
+                    }
                 }
             }
         } ?: run { feedback = "Syncthing is still starting. Retry in a moment." }
@@ -231,7 +235,7 @@ fun SettingsGamingFirstSetupScreen() {
             }
             4 -> {
                 item { SetupHeading("Automatic safety checks") }
-                item { Preference(title = { Text("Apply and validate protection") }, summary = { Text("Configures immediate gamelist saving, ROM gamelist location and the first-effective gamelist.xml ignore rule for every selected folder.") }, enabled = coreComplete, onClick = ::validateAndApply) }
+                item { Preference(title = { Text("Apply and validate protection") }, summary = { Text("Configures immediate gamelist saving and the ROM gamelist location. The first-effective gamelist.xml ignore rule is applied only to Master / Roms; other selected folders are not modified.") }, enabled = coreComplete, onClick = ::validateAndApply) }
                 if (feedback.isNotBlank()) item { Preference(title = { Text("Result") }, summary = { Text(feedback) }) }
                 if (role == EsdeSyncSettings.ROLE_SOURCE) item {
                     Preference(
@@ -273,7 +277,7 @@ fun SettingsGamingFirstSetupScreen() {
                 TextButton(onClick = { if (step == 0) navigator.navigateUp() else step-- }) { Text(if (step == 0) "SET UP LATER" else "BACK") }
                 if (step < SETUP_STEPS.lastIndex) Button(onClick = { settings.enabled = true; step++ }) { Text("NEXT") }
                 else Button(
-                    enabled = coreComplete && api != null && service?.esdeSyncCoordinator != null,
+                    enabled = coreComplete && api != null && service.esdeSyncCoordinator != null,
                     onClick = ::finishSetup,
                 ) { Text("FINISH & OPEN SAFE LAUNCH") }
             }
