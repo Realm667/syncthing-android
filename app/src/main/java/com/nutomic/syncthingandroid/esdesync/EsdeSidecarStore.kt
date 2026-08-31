@@ -28,6 +28,8 @@ class EsdeSidecarStore(private val gson: Gson = Gson()) {
             playtime = metadata.playtime,
             lastplayed = metadata.lastplayed,
             altemulator = metadata.altemulator,
+            players = metadata.players,
+            rating = metadata.rating,
             updatedAt = utcNow(),
         )
         val json = gson.toJson(state) + "\n"
@@ -54,6 +56,10 @@ class EsdeSidecarStore(private val gson: Gson = Gson()) {
             throw JsonParseException(error.message, error)
         }
         if (state.game != normalized) throw JsonParseException("Sidecar game path is not canonical")
+        if (state.players != null && !EsdeMetadataValidation.isValidPlayers(state.players)) {
+            throw JsonParseException("Invalid players value")
+        }
+        if (state.rating != null && state.rating !in 0.0..1.0) throw JsonParseException("Invalid rating value")
         val systemDirectory = findSystemDirectory(file)
             ?: throw JsonParseException("Sidecar is outside .esde-sync")
         if (EsdePathPolicy.sidecarFile(systemDirectory, normalized).canonicalFile != file.canonicalFile) {

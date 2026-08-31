@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -119,7 +121,7 @@ fun SettingsGamingScreen() {
         item {
             Preference(
                 title = { Text("Metadata fields") },
-                summary = { Text("favorite · completed · playcount · playtime · lastplayed · altemulator") },
+                summary = { Text("favorite · completed · playcount · playtime · lastplayed · altemulator · players · rating") },
                 enabled = enabled.value,
             )
         }
@@ -252,7 +254,7 @@ fun SettingsGamingScreen() {
                         val valid = result.matched + result.unmatched
                         val message = when {
                             result.invalid > 0 -> "Import finished: ${result.changedGames} changed, ${result.invalid} invalid sidecar(s)"
-                            valid == 0 -> "No .esde.json sidecars found. On the first device, use ‘Use this device as initial metadata source’."
+                            valid == 0 -> "No .esde.json sidecars found. Use local Android gamelists only if this device is authoritative; otherwise bootstrap them on the authoritative NAS or desktop."
                             else -> "Import finished: ${result.matched} matched, ${result.changedGames} changed, ${result.unmatched} unmatched"
                         }
                         Toast.makeText(context, message, Toast.LENGTH_LONG).show()
@@ -308,6 +310,14 @@ fun SettingsGamingScreen() {
         }
         item {
             Preference(
+                title = { Text("Shared Collections & ES-DE Settings") },
+                summary = { Text("Select collections and an explicit per-setting allowlist, publish/import, and inspect conflicts") },
+                onClick = { navigator.navigateTo(SettingsRoute.GamingSharedState) },
+                enabled = enabled.value,
+            )
+        }
+        item {
+            Preference(
                 title = { Text(stringResource(R.string.esde_sync_diagnostics)) },
                 onClick = { navigator.navigateTo(SettingsRoute.GamingDiagnostics) },
             )
@@ -321,8 +331,9 @@ fun SettingsGamingScreen() {
         onDismiss = { showDevices = false },
     )
     if (showFolders) FolderDialog(
-        folders = api?.folders?.filter { primaryDevice.isBlank() || it.getDevice(primaryDevice) != null } ?: emptyList(),
+        folders = api?.folders?.sortedWith(compareBy<Folder> { it.group }.thenBy { it.label }.thenBy { it.id }) ?: emptyList(),
         selected = selectedFolders,
+        primaryDevice = primaryDevice,
         onSave = { selectedFolders = it; settings.selectedFolderIds = it; showFolders = false },
         onDismiss = { showFolders = false },
     )
@@ -344,18 +355,30 @@ private fun DeviceDialog(devices: List<Device>, selected: String, onSelect: (Str
 }
 
 @Composable
-private fun FolderDialog(folders: List<Folder>, selected: Set<String>, onSave: (Set<String>) -> Unit, onDismiss: () -> Unit) {
+private fun FolderDialog(
+    folders: List<Folder>,
+    selected: Set<String>,
+    primaryDevice: String,
+    onSave: (Set<String>) -> Unit,
+    onDismiss: () -> Unit,
+) {
     var values by remember(selected) { mutableStateOf(selected) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.esde_sync_folders)) },
-        text = { Column { folders.forEach { folder ->
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) { folders.forEach { folder ->
             Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(
                     checked = folder.id in values,
                     onCheckedChange = { checked -> values = if (checked) values + folder.id else values - folder.id },
                 )
-                Text(folder.toString())
+                Column {
+                    val label = folder.toString()
+                    Text(if (folder.group.isBlank()) label else "${folder.group} / $label")
+                    if (primaryDevice.isNotBlank() && folder.getDevice(primaryDevice) == null) {
+                        Text("Not shared with the selected Primary Sync Device")
+                    }
+                }
             }
         } } },
         confirmButton = { Button(onClick = { onSave(values) }) { Text("Save") } },

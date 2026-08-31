@@ -6,11 +6,11 @@
     <color name="divider">#1F000000</color>
 
     <color name="text_black">#000000</color>
-    <color name="text_red">#ffff4444</color>
+    <color name="text_red">#D96B68</color>
     <color name="text_blue">#B52A46</color>
-    <color name="text_green">#ff99cc00</color>
-    <color name="text_orange">#f57c00</color>
-    <color name="text_purple">#8e24aa</color>
+    <color name="text_green">#74BF6C</color>
+    <color name="text_orange">#D39A52</color>
+    <color name="text_purple">#A477A8</color>
     <color name="blue_grey">#3C2A2E</color>
     <color name="light_grey">#cccccc</color>
     <color name="light_blue">#FFB3BF</color>

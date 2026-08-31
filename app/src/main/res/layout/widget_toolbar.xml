@@ -26,7 +26,7 @@
             android:focusable="false"
             android:clickable="false"
             android:visibility="gone"
-            app:buttonTint="#76ff03"/>
+            app:buttonTint="#74BF6C"/>
 
         <androidx.appcompat.widget.AppCompatRadioButton
             android:id="@+id/btnStarting"
@@ -36,7 +36,7 @@
             android:focusable="false"
             android:clickable="false"
             android:visibility="gone"
-            app:buttonTint="#fff103"/>
+            app:buttonTint="#D8B85B"/>
 
         <androidx.appcompat.widget.AppCompatRadioButton
             android:id="@+id/btnDisabled"
@@ -46,7 +46,7 @@
             android:focusable="false"
             android:clickable="false"
             android:visibility="gone"
-            app:buttonTint="#ffae03"/>
+            app:buttonTint="#D39A52"/>
 
     </RelativeLayout>
 

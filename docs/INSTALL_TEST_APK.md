@@ -93,10 +93,14 @@ restored configuration and continues without generating a new identity.
 9. Select only folders that must block launch (typically ROMs, saves, states, and
    ES-DE data).
 10. Run **Check and add gamelist.xml ignore rule**. Existing ignore lines are
-   preserved. Confirm `gamelist.xml` is ignored on every participating device.
+    preserved, but the basename rule is moved ahead of broader include rules
+    because Syncthing uses the first matching rule. Confirm `gamelist.xml` is
+    ignored on every participating device.
 11. If synchronized sidecars already exist, let the automatic import finish. If
-    none exist anywhere, choose exactly one current device and explicitly press
-    **Use this device as initial metadata source**.
+    none exist anywhere and this Android device is authoritative, explicitly
+    press **Use local Android gamelists as initial metadata source** exactly once.
+    If a NAS or desktop is authoritative, do not press it; run
+    `scripts/Initialize-EsdeSidecars.ps1` against that gamelist root instead.
 12. Open the separate **ES-DE Safe Launch** icon or use **Open ES-DE Safe
     Launch** in Gaming Sync settings if the device launcher collapses both app
     icons. In Android's Home picker the Safe Launch entry may be displayed as
@@ -105,9 +109,34 @@ restored configuration and continues without generating a new identity.
 13. In Android App info, turn off **Pause app activity if unused**. Android keeps
     this user-controlled and does not let the APK disable it during installation.
 
-**Import metadata now** only applies sidecars that already exist. On the first
-device, use **Use this device as initial metadata source** instead; the app now
-reports both zero-result imports and successful import/export counts visibly.
+**Import metadata now** only applies sidecars that already exist. With an
+authoritative Android source, use **Use local Android gamelists as initial
+metadata source** instead. With an authoritative NAS or desktop source, first
+bootstrap the sidecars there. The app reports both zero-result imports and
+successful import/export counts visibly.
+
+## Bootstrap from an authoritative QNAP or Windows share
+
+Android cannot consume a Windows UNC path as its local initial source. Run the
+one-time PowerShell bootstrap from a Windows computer that can access the share.
+The script reads `gamelist.xml` files without modifying them and creates the same
+version-1 sidecars used by the Android bridge:
+
+```powershell
+# Preview only; writes nothing.
+.\scripts\Initialize-EsdeSidecars.ps1 `
+  -RomsRoot '\\Dg-qn-nas\database\EMULATION\ROMs\HANDHELD-SYNC\ROMS'
+
+# Apply after checking the preview counts.
+.\scripts\Initialize-EsdeSidecars.ps1 `
+  -RomsRoot '\\Dg-qn-nas\database\EMULATION\ROMs\HANDHELD-SYNC\ROMS' `
+  -Apply
+```
+
+Existing sidecars are skipped. `-OverwriteExisting` is available only for an
+intentional re-bootstrap. Let Syncthing finish distributing `.esde-sync` before
+opening Safe Launch on Android. Keep `gamelist.xml` as the first effective
+ignore rule in every relevant Syncthing folder; the XML itself remains local.
 
 ## Safe first test
 

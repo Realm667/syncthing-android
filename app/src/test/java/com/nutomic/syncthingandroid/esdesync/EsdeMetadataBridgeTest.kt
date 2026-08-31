@@ -40,6 +40,8 @@ class EsdeMetadataBridgeTest {
             value.copy(favorite = true, completed = true, playcount = 1, playtime = 9_999_999),
             value.copy(favorite = true, completed = true, playcount = 1, playtime = 9_999_999, lastplayed = "20260831T120000"),
             value.copy(favorite = true, completed = true, playcount = 1, playtime = 9_999_999, lastplayed = "20260831T120000", altemulator = "RETROARCH:MGBA"),
+            value.copy(favorite = true, completed = true, playcount = 1, playtime = 9_999_999, lastplayed = "20260831T120000", altemulator = "RETROARCH:MGBA", players = "1-2"),
+            value.copy(favorite = true, completed = true, playcount = 1, playtime = 9_999_999, lastplayed = "20260831T120000", altemulator = "RETROARCH:MGBA", players = "1-2", rating = 0.9),
         )
         changes.forEach { next ->
             gamelist.writeText(singleGameXml(next))
@@ -67,6 +69,7 @@ class EsdeMetadataBridgeTest {
         <gameList><game><path>./Game.sfc</path><favorite>${value.favorite}</favorite>
         <completed>${value.completed}</completed><playcount>${value.playcount}</playcount>
         <playtime>${value.playtime}</playtime><lastplayed>${value.lastplayed}</lastplayed>
-        <altemulator>${value.altemulator}</altemulator></game></gameList>
+        <altemulator>${value.altemulator}</altemulator><players>${value.players}</players>
+        <rating>${value.rating}</rating></game></gameList>
     """.trimIndent()
 }

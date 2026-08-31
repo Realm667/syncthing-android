@@ -27,8 +27,8 @@ class EsdeIgnoreRuleManager(private val restApi: RestApi) {
                         EsdeIgnoreRuleState.ACTIVE -> Unit
                         EsdeIgnoreRuleState.CONFLICTING_INCLUDE -> synchronized(this) { conflicting++ }
                         EsdeIgnoreRuleState.MISSING -> {
-                            existing.add(IGNORE_RULE)
-                            restApi.postFolderIgnoreList(folderId, existing.toTypedArray())
+                            val corrected = EsdeIgnoreRules.placeIgnoreRuleFirst(existing)
+                            restApi.postFolderIgnoreList(folderId, corrected.toTypedArray())
                             synchronized(this) { updated++ }
                         }
                     }

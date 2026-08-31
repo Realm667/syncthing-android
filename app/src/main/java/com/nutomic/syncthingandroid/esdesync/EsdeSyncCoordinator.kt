@@ -118,6 +118,80 @@ class EsdeSyncCoordinator(
         }
     }
 
+    fun discoverSharedCollections(callback: (Set<String>) -> Unit) {
+        executor.execute {
+            val names = runCatching { collectionsManager().discover() }.getOrDefault(emptySet())
+            mainHandler.post { callback(names) }
+        }
+    }
+
+    fun publishSharedCollections(callback: (EsdeSharedOperationResult) -> Unit = {}) = sharedAction(
+        timestampKey = EsdeSyncSettings.PREF_LAST_COLLECTION_PUBLISH,
+        callback = callback,
+    ) { collectionsManager().publish(settings.sharedCollectionNames) }
+
+    fun importSharedCollections(callback: (EsdeSharedOperationResult) -> Unit = {}) = sharedAction(
+        timestampKey = EsdeSyncSettings.PREF_LAST_COLLECTION_IMPORT,
+        callback = callback,
+    ) {
+        requireEsdeStopped()
+        collectionsManager().importSelected(settings.sharedCollectionNames, esdeSettingsFile())
+    }
+
+    fun publishSharedSettings(callback: (EsdeSharedOperationResult) -> Unit = {}) = sharedAction(
+        timestampKey = EsdeSyncSettings.PREF_LAST_SETTINGS_PUBLISH,
+        callback = callback,
+    ) { settingsManager().publish(settings.sharedSettingNames) }
+
+    fun importSharedSettings(callback: (EsdeSharedOperationResult) -> Unit = {}) = sharedAction(
+        timestampKey = EsdeSyncSettings.PREF_LAST_SETTINGS_IMPORT,
+        callback = callback,
+    ) {
+        requireEsdeStopped()
+        settingsManager().importSelected(settings.sharedSettingNames)
+    }
+
+    fun importSharedStateBeforeLaunch(callback: (EsdeGlobalImportResult) -> Unit = {}) {
+        executor.execute {
+            val result = runCatching {
+                requireEsdeStopped()
+                val collections = if (settings.sharedCollectionsEnabled) {
+                    collectionsManager().importSelected(settings.sharedCollectionNames, esdeSettingsFile())
+                } else EsdeSharedOperationResult()
+                val sharedSettings = if (settings.sharedSettingsEnabled) {
+                    settingsManager().importSelected(settings.sharedSettingNames)
+                } else EsdeSharedOperationResult()
+                if (settings.sharedCollectionsEnabled) recordSharedResult(
+                    EsdeSyncSettings.PREF_LAST_COLLECTION_IMPORT, collections,
+                )
+                if (settings.sharedSettingsEnabled) recordSharedResult(
+                    EsdeSyncSettings.PREF_LAST_SETTINGS_IMPORT, sharedSettings,
+                )
+                EsdeGlobalImportResult(collections, sharedSettings)
+            }.getOrElse { error ->
+                recordError("Shared state import failed", error)
+                EsdeGlobalImportResult(settings = EsdeSharedOperationResult(errors = listOf(error.message ?: "Import failed")))
+            }
+            mainHandler.post { callback(result) }
+        }
+    }
+
+    fun publishSharedState(callback: (EsdeGlobalImportResult) -> Unit = {}) {
+        executor.execute {
+            val collections = if (settings.sharedCollectionsEnabled) {
+                runCatching { collectionsManager().publish(settings.sharedCollectionNames) }
+                    .getOrElse { EsdeSharedOperationResult(errors = listOf(it.message ?: "Publish failed")) }
+            } else EsdeSharedOperationResult()
+            val sharedSettings = if (settings.sharedSettingsEnabled) {
+                runCatching { settingsManager().publish(settings.sharedSettingNames) }
+                    .getOrElse { EsdeSharedOperationResult(errors = listOf(it.message ?: "Publish failed")) }
+            } else EsdeSharedOperationResult()
+            if (settings.sharedCollectionsEnabled) recordSharedResult(EsdeSyncSettings.PREF_LAST_COLLECTION_PUBLISH, collections)
+            if (settings.sharedSettingsEnabled) recordSharedResult(EsdeSyncSettings.PREF_LAST_SETTINGS_PUBLISH, sharedSettings)
+            mainHandler.post { callback(EsdeGlobalImportResult(collections, sharedSettings)) }
+        }
+    }
+
     fun initializeFromThisDevice(callback: (EsdeInitializationResult) -> Unit = {}) {
         executor.execute {
             if (sidecarsExist()) {
@@ -267,6 +341,53 @@ class EsdeSyncCoordinator(
     private fun recordError(message: String, error: Throwable) {
         Log.e(TAG, message, error)
         diagnostics = diagnostics.copy(lastError = "$message: ${error.message}")
+    }
+
+    private fun collectionsManager(): EsdeSharedCollectionsManager = EsdeSharedCollectionsManager(
+        gamelistsDirectory(),
+        File(settings.esdeDirectory),
+        EsdeSharedSnapshotStore(File(appContext.filesDir, "esde-sync/shared-snapshots")),
+        EsdePrivateFileBackup(File(appContext.filesDir, "esde-sync/backups/shared")),
+    )
+
+    private fun settingsManager(): EsdeSharedSettingsManager = EsdeSharedSettingsManager(
+        gamelistsDirectory(),
+        File(settings.esdeDirectory),
+        EsdeSharedSnapshotStore(File(appContext.filesDir, "esde-sync/shared-snapshots")),
+        EsdePrivateFileBackup(File(appContext.filesDir, "esde-sync/backups/shared")),
+    )
+
+    private fun esdeSettingsFile(): File = File(File(settings.esdeDirectory, "settings"), "es_settings.xml")
+
+    private fun requireEsdeStopped() {
+        check(!settings.esdeWasLaunched) { "ES-DE is running; shared state can only be applied before Safe Launch" }
+        require(esdeSettingsFile().isFile) { "Missing ES-DE settings/es_settings.xml" }
+    }
+
+    private fun sharedAction(
+        timestampKey: String,
+        callback: (EsdeSharedOperationResult) -> Unit,
+        action: () -> EsdeSharedOperationResult,
+    ) {
+        executor.execute {
+            val result = runCatching(action).getOrElse { error ->
+                recordError("Shared ES-DE operation failed", error)
+                EsdeSharedOperationResult(errors = listOf(error.message ?: "Operation failed"))
+            }
+            recordSharedResult(timestampKey, result)
+            mainHandler.post { callback(result) }
+        }
+    }
+
+    private fun recordSharedResult(timestampKey: String, result: EsdeSharedOperationResult) {
+        preferences.edit()
+            .putLong(timestampKey, System.currentTimeMillis())
+            .putString(EsdeSyncSettings.PREF_LAST_SHARED_STATUS, result.summary("Shared state"))
+            .putInt(EsdeSyncSettings.PREF_LAST_SHARED_APPLIED, result.applied)
+            .putInt(EsdeSyncSettings.PREF_LAST_SHARED_SKIPPED, result.skipped)
+            .putString(EsdeSyncSettings.PREF_LAST_SHARED_CONFLICTS, result.conflicts.joinToString())
+            .putString(EsdeSyncSettings.PREF_LAST_SHARED_ERRORS, result.errors.joinToString())
+            .apply()
     }
 
     companion object { private const val TAG = "ESDESync" }

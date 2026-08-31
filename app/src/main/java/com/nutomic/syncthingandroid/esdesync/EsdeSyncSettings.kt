@@ -40,6 +40,33 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
         get() = preferences.getStringSet(PREF_GAMING_FOLDERS, emptySet())?.toSet() ?: emptySet()
         set(value) { preferences.edit().putStringSet(PREF_GAMING_FOLDERS, value.toSet()).apply() }
 
+    var sharedCollectionsEnabled: Boolean
+        get() = preferences.getBoolean(PREF_SHARED_COLLECTIONS_ENABLED, false)
+        set(value) { preferences.edit().putBoolean(PREF_SHARED_COLLECTIONS_ENABLED, value).apply() }
+
+    var sharedCollectionNames: Set<String>
+        get() = selectedByPrefix(PREF_SHARED_COLLECTION_PREFIX)
+        set(value) { replaceSelectedByPrefix(PREF_SHARED_COLLECTION_PREFIX, value) }
+
+    var sharedSettingsEnabled: Boolean
+        get() = preferences.getBoolean(PREF_SHARED_SETTINGS_ENABLED, false)
+        set(value) { preferences.edit().putBoolean(PREF_SHARED_SETTINGS_ENABLED, value).apply() }
+
+    var sharedSettingNames: Set<String>
+        get() = selectedByPrefix(PREF_SHARED_SETTING_PREFIX)
+        set(value) { replaceSelectedByPrefix(PREF_SHARED_SETTING_PREFIX, value) }
+
+    private fun selectedByPrefix(prefix: String): Set<String> = preferences.all.entries
+        .filter { (key, value) -> key.startsWith(prefix) && value == true }
+        .mapTo(mutableSetOf()) { it.key.removePrefix(prefix) }
+
+    private fun replaceSelectedByPrefix(prefix: String, values: Set<String>) {
+        val editor = preferences.edit()
+        preferences.all.keys.filter { it.startsWith(prefix) }.forEach(editor::remove)
+        values.forEach { editor.putBoolean(prefix + it, true) }
+        editor.apply()
+    }
+
     var bootstrapComplete: Boolean
         get() = preferences.getBoolean(PREF_BOOTSTRAP_COMPLETE, false)
         set(value) { preferences.edit().putBoolean(PREF_BOOTSTRAP_COMPLETE, value).apply() }
@@ -122,6 +149,10 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
         const val PREF_APPLICATION_PACKAGE = "esdeSync.applicationPackage"
         const val PREF_PRIMARY_DEVICE = "esdeSync.primaryDevice"
         const val PREF_GAMING_FOLDERS = "esdeSync.gamingFolders"
+        const val PREF_SHARED_COLLECTIONS_ENABLED = "esdeSync.sharedCollections.enabled"
+        const val PREF_SHARED_COLLECTION_PREFIX = "esdeSync.sharedCollections.selected."
+        const val PREF_SHARED_SETTINGS_ENABLED = "esdeSync.sharedSettings.enabled"
+        const val PREF_SHARED_SETTING_PREFIX = "esdeSync.sharedSettings.selected."
         const val PREF_BOOTSTRAP_COMPLETE = "esdeSync.bootstrapComplete"
         const val PREF_BOOTSTRAP_PENDING_IMPORT = "esdeSync.bootstrapPendingImport"
         const val PREF_PENDING_LOCAL_CHANGES = "esdeSync.pendingLocalChanges"
@@ -135,5 +166,14 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
         const val PREF_LAST_PRE_SYNC = "esdeSync.lastPreSync"
         const val PREF_LAST_POST_SYNC = "esdeSync.lastPostSync"
         const val PREF_LAST_SUCCESSFUL_SYNC = "esdeSync.lastSuccessfulSync"
+        const val PREF_LAST_COLLECTION_PUBLISH = "esdeSync.sharedCollections.lastPublish"
+        const val PREF_LAST_COLLECTION_IMPORT = "esdeSync.sharedCollections.lastImport"
+        const val PREF_LAST_SETTINGS_PUBLISH = "esdeSync.sharedSettings.lastPublish"
+        const val PREF_LAST_SETTINGS_IMPORT = "esdeSync.sharedSettings.lastImport"
+        const val PREF_LAST_SHARED_STATUS = "esdeSync.shared.lastStatus"
+        const val PREF_LAST_SHARED_APPLIED = "esdeSync.shared.lastApplied"
+        const val PREF_LAST_SHARED_SKIPPED = "esdeSync.shared.lastSkipped"
+        const val PREF_LAST_SHARED_CONFLICTS = "esdeSync.shared.lastConflicts"
+        const val PREF_LAST_SHARED_ERRORS = "esdeSync.shared.lastErrors"
     }
 }

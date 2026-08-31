@@ -105,15 +105,35 @@ enum class EsdeIgnoreRuleState { ACTIVE, MISSING, CONFLICTING_INCLUDE }
 
 object EsdeIgnoreRules {
     fun evaluate(lines: Collection<String>): EsdeIgnoreRuleState {
-        lines.forEach { raw ->
-            var line = raw.trim()
-            while (line.startsWith("(?i)") || line.startsWith("(?d)")) line = line.drop(4)
-            val included = line.startsWith('!')
-            if (included) line = line.drop(1)
-            if (line == "gamelist.xml" || line == "**/gamelist.xml") {
-                return if (included) EsdeIgnoreRuleState.CONFLICTING_INCLUDE else EsdeIgnoreRuleState.ACTIVE
+        val normalized = lines.map(::normalize)
+        if (normalized.any { (included, pattern) -> included && pattern in GAMELIST_PATTERNS }) {
+            return EsdeIgnoreRuleState.CONFLICTING_INCLUDE
+        }
+        var includeSeen = false
+        normalized.forEach { (included, pattern) ->
+            if (included) includeSeen = true
+            if (!included && pattern in GAMELIST_PATTERNS) {
+                return if (includeSeen) EsdeIgnoreRuleState.MISSING else EsdeIgnoreRuleState.ACTIVE
             }
         }
         return EsdeIgnoreRuleState.MISSING
     }
+
+    fun placeIgnoreRuleFirst(lines: Collection<String>): List<String> = buildList {
+        add("gamelist.xml")
+        addAll(lines.filterNot { raw ->
+            val (included, pattern) = normalize(raw)
+            !included && pattern in GAMELIST_PATTERNS
+        })
+    }
+
+    private fun normalize(raw: String): Pair<Boolean, String> {
+        var line = raw.trim()
+        while (line.startsWith("(?i)") || line.startsWith("(?d)")) line = line.drop(4)
+        val included = line.startsWith('!')
+        if (included) line = line.drop(1)
+        return included to line
+    }
+
+    private val GAMELIST_PATTERNS = setOf("gamelist.xml", "**/gamelist.xml")
 }

@@ -157,13 +157,27 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             state = evaluated
             if (evaluated == EsdeSyncState.READY_TO_PLAY) {
                 state = EsdeSyncState.IMPORTING_METADATA
-                statusDetail = "Applying synchronized ES-DE metadata…"
-                service?.esdeSyncCoordinator?.importNow(finalizeBootstrap = !settings.bootstrapComplete) {
-                    state = EsdeSyncState.READY_TO_PLAY
-                    statusDetail = "Everything is synchronized."
-                } ?: run {
+                statusDetail = "Applying Shared Collections and ES-DE settings…"
+                val coordinator = service?.esdeSyncCoordinator
+                if (coordinator == null) {
                     state = EsdeSyncState.ERROR
                     statusDetail = "Metadata bridge is not available."
+                } else coordinator.importSharedStateBeforeLaunch { shared ->
+                    if (!shared.successful) {
+                        state = EsdeSyncState.ERROR
+                        statusDetail = shared.errorSummary()
+                    } else {
+                        statusDetail = "Applying synchronized per-game metadata…"
+                        coordinator.importNow(finalizeBootstrap = !settings.bootstrapComplete) { metadata ->
+                            if (metadata.invalid > 0) {
+                                state = EsdeSyncState.ERROR
+                                statusDetail = "Per-game metadata contains ${metadata.invalid} invalid sidecar(s)."
+                            } else {
+                                state = EsdeSyncState.READY_TO_PLAY
+                                statusDetail = "Everything is synchronized."
+                            }
+                        }
+                    }
                 }
                 return@refreshFreshGateData
             }
@@ -208,7 +222,11 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 id = id,
                 paused = folder.paused || cache.paused,
                 state = status.state ?: "unknown",
-                error = listOf(status.error, status.invalid, status.watchError).firstOrNull { !it.isNullOrBlank() } ?: "",
+                error = if (folder.getDevice(settings.primaryDeviceId) == null) {
+                    "Folder is not shared with the selected Primary Sync Device"
+                } else {
+                    listOf(status.error, status.invalid, status.watchError).firstOrNull { !it.isNullOrBlank() } ?: ""
+                },
                 needFiles = status.needFiles,
                 needBytes = status.needBytes,
                 needTotalItems = status.needTotalItems,
@@ -270,12 +288,21 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             return
         }
         coordinator.exportNow { _ ->
-            state = EsdeSyncState.SYNCING_AFTER_PLAY
-            statusDetail = "Synchronizing game data after play…"
-            api?.let { rest -> settings.selectedFolderIds.forEach { rest.rescanFolder(it) } }
-            preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_POST_SYNC, System.currentTimeMillis()).apply()
-            pollStartedAt = System.currentTimeMillis()
-            handler.postDelayed(::pollPostSync, INITIAL_SCAN_DELAY_MS)
+            statusDetail = "Publishing selected Shared Collections and ES-DE settings…"
+            coordinator.publishSharedState { shared ->
+                if (!shared.successful) {
+                    state = EsdeSyncState.ERROR
+                    settings.pendingLocalChanges = true
+                    statusDetail = shared.errorSummary()
+                } else {
+                    state = EsdeSyncState.SYNCING_AFTER_PLAY
+                    statusDetail = "Synchronizing game data after play…"
+                    api?.let { rest -> settings.selectedFolderIds.forEach { rest.rescanFolder(it) } }
+                    preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_POST_SYNC, System.currentTimeMillis()).apply()
+                    pollStartedAt = System.currentTimeMillis()
+                    handler.postDelayed(::pollPostSync, INITIAL_SCAN_DELAY_MS)
+                }
+            }
         }
     }
 
@@ -358,7 +385,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
 
     private fun setupRequirementsMessage(missing: Set<EsdeSetupRequirement>): String {
         if (missing == setOf(EsdeSetupRequirement.INITIAL_METADATA_SOURCE)) {
-            return "Choose the initial metadata source. On the first device, select ‘Use this device as initial metadata source’."
+            return "No synchronized metadata source exists yet. Use the local Android gamelists only if this device is authoritative. For a NAS or desktop source, create the sidecars there first."
         }
         val labels = missing.mapNotNull {
             when (it) {
@@ -404,7 +431,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                     EsdeSyncState.READY_TO_PLAY -> Button(onClick = { launchEsde(false) }) { Text("START ES-DE") }
                     EsdeSyncState.NOT_CONFIGURED -> {
                         if (settings.missingSafeLaunchRequirements() == setOf(EsdeSetupRequirement.INITIAL_METADATA_SOURCE)) {
-                            Button(onClick = ::initializeFromThisDevice) { Text("USE THIS DEVICE AS INITIAL SOURCE") }
+                            Button(onClick = ::initializeFromThisDevice) { Text("USE LOCAL ANDROID GAMELISTS AS SOURCE") }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Button(onClick = ::openSettings) { Text("OPEN SETTINGS") }
@@ -424,7 +451,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             if (state != EsdeSyncState.READY_TO_PLAY && state != EsdeSyncState.SAFE_TO_SWITCH) {
                 Text(
                     "Local changes will be kept. Fully synchronize this device before continuing on another handheld.",
-                    color = Color(0xFFFFC46B),
+                    color = Color(0xFFD8A657),
                 )
             }
         }
@@ -435,12 +462,12 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         val healthy = health.state == "idle" && health.needTotalItems == 0L && health.conflicts == 0
         Card(
             modifier = Modifier.fillMaxWidth().focusable(),
-            border = BorderStroke(1.dp, if (healthy) Color(0xFF4CAF78) else Color(0xFFFFC46B)),
+            border = BorderStroke(1.dp, if (healthy) Color(0xFF74BF6C) else Color(0xFFD8A657)),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF2A1118)),
         ) {
             Row(Modifier.fillMaxWidth().padding(18.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(health.id, color = Color.White)
-                Text(if (healthy) "✓ Up to date" else "${health.needTotalItems} items remaining", color = if (healthy) Color(0xFF72D69A) else Color(0xFFFFC46B))
+                Text(if (healthy) "✓ Up to date" else "${health.needTotalItems} items remaining", color = if (healthy) Color(0xFF74BF6C) else Color(0xFFD8A657))
             }
         }
     }
@@ -456,9 +483,9 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     }
 
     private fun stateColor(value: EsdeSyncState): Color = when (value) {
-        EsdeSyncState.READY_TO_PLAY, EsdeSyncState.SAFE_TO_SWITCH -> Color(0xFF72D69A)
-        EsdeSyncState.ERROR -> Color(0xFFFF6B6B)
-        else -> Color(0xFFFFC46B)
+        EsdeSyncState.READY_TO_PLAY, EsdeSyncState.SAFE_TO_SWITCH -> Color(0xFF74BF6C)
+        EsdeSyncState.ERROR -> Color(0xFFD96B68)
+        else -> Color(0xFFD8A657)
     }
 
     companion object {

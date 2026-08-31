@@ -34,6 +34,24 @@ class EsdeSidecarStoreTest {
         org.junit.Assert.assertThrows(JsonParseException::class.java) { store.read(valid) }
     }
 
+    @Test fun remainsCompatibleWithOptionalPlayersAndRating() {
+        val system = temporary.newFolder("optional-fields")
+        val root = File(system, ".esde-sync").apply { mkdirs() }
+        val old = File(root, "Old.rom.esde.json").apply {
+            writeText("""{"schemaVersion":1,"game":"./Old.rom","favorite":true}""")
+        }
+        assertEquals(EsdeMetadata(favorite = true), store.read(old).metadata())
+
+        val metadata = EsdeMetadata(players = "1-2", rating = 1.0)
+        assertTrue(store.write(system, "./New.rom", metadata))
+        assertEquals(metadata, store.read(File(root, "New.rom.esde.json")).metadata())
+
+        val invalid = File(root, "Bad.rom.esde.json").apply {
+            writeText("""{"schemaVersion":1,"game":"./Bad.rom","players":"0-2","rating":2.0}""")
+        }
+        org.junit.Assert.assertThrows(JsonParseException::class.java) { store.read(invalid) }
+    }
+
     @Test fun rejectsTraversalAbsoluteAndDrivePaths() {
         listOf("../../secret", "/absolute/game", "C:/game.rom", "./ok/../bad").forEach { path ->
             org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {

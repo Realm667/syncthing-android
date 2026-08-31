@@ -72,5 +72,36 @@ class EsdeGamelistParserTest {
         org.junit.Assert.assertThrows(Exception::class.java) { parser.parse(file) }
     }
 
+    @Test fun acceptsEsdeAlternativeEmulatorSiblingAndPreservesItOnWrite() {
+        val file = gamelist("""
+            <?xml version="1.0"?>
+            <alternativeEmulator><label>bsnes-hd</label></alternativeEmulator>
+            <gameList><game><path>./Chrono Trigger.sfc</path><favorite>false</favorite></game></gameList>
+        """)
+        assertEquals(false, parser.parse(file)["./Chrono Trigger.sfc"]?.favorite)
+
+        val result = parser.apply(file, mapOf("./Chrono Trigger.sfc" to EsdeMetadata(favorite = true)))
+
+        assertEquals(1, result.changed)
+        assertEquals(true, parser.parse(file)["./Chrono Trigger.sfc"]?.favorite)
+        val xml = file.readText()
+        assertTrue(xml.contains("<alternativeEmulator>"))
+        assertTrue(xml.contains("<label>bsnes-hd</label>"))
+        assertFalse(xml.contains("<$FRAGMENT_ROOT_FOR_ASSERTION>"))
+    }
+
+    @Test fun rejectsUnknownOrRepeatedFragmentRoots() {
+        val file = gamelist("<other/><gameList/>")
+        org.junit.Assert.assertThrows(Exception::class.java) {
+            parser.parse(file)
+        }
+        file.writeText("<gameList/><gameList/>")
+        org.junit.Assert.assertThrows(Exception::class.java) {
+            parser.parse(file)
+        }
+    }
+
     private fun gamelist(xml: String): File = temporary.newFile("gamelist.xml").also { it.writeText(xml.trimIndent()) }
+
+    companion object { private const val FRAGMENT_ROOT_FOR_ASSERTION = "esdeSyncDocument" }
 }

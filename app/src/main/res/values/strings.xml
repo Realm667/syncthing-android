@@ -29,9 +29,9 @@
     <string name="esde_sync_folders_summary">Syncthing folders that must be fully synchronized before ES-DE starts, such as ROM, save, media, and metadata folders</string>
     <string name="esde_sync_not_selected">Not selected</string>
     <string name="esde_sync_ignore_check">Check and add gamelist.xml ignore rule</string>
-    <string name="esde_sync_ignore_check_summary">Keep gamelist.xml local on every device and synchronize only the per-game .esde.json sidecars</string>
-    <string name="esde_sync_initialize">Use this device as initial metadata source</string>
-    <string name="esde_sync_initialize_summary">One-time first-device action: create the initial .esde.json sidecars from this device without overwriting synchronized sidecars</string>
+    <string name="esde_sync_ignore_check_summary">Keep gamelist.xml local by placing its basename rule before broader include rules; synchronize only per-game .esde.json sidecars</string>
+    <string name="esde_sync_initialize">Use local Android gamelists as initial metadata source</string>
+    <string name="esde_sync_initialize_summary">Use only when this Android device is authoritative. For a NAS or desktop source, create sidecars there first and let Android import them.</string>
     <string name="esde_sync_import_now">Import metadata now</string>
     <string name="esde_sync_export_now">Export metadata now</string>
     <string name="esde_sync_diagnostics">ES-DE Sync diagnostics</string>

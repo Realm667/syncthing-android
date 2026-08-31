@@ -4,6 +4,8 @@ import org.w3c.dom.Element
 import org.w3c.dom.Node
 import org.xml.sax.SAXException
 import org.xml.sax.InputSource
+import org.xml.sax.SAXParseException
+import org.xml.sax.helpers.DefaultHandler
 import java.io.File
 import java.io.OutputStreamWriter
 import java.io.StringReader
@@ -16,6 +18,55 @@ import javax.xml.transform.dom.DOMSource
 import javax.xml.transform.stream.StreamResult
 
 class EsdeSettingsEditor {
+    data class XmlSetting(val type: String, val value: String)
+
+    fun read(file: File, names: Set<String>): Map<String, XmlSetting> {
+        val parsed = parse(file)
+        val result = linkedMapOf<String, XmlSetting>()
+        settingElements(parsed.container).forEach { element ->
+            val name = element.getAttribute("name")
+            if (name in names && element.tagName in SETTING_TYPES && element.hasAttribute("value")) {
+                require(name !in result) { "Duplicate ES-DE setting: $name" }
+                result[name] = XmlSetting(element.tagName, element.getAttribute("value"))
+            }
+        }
+        return result
+    }
+
+    fun apply(file: File, values: Map<String, XmlSetting>): Int {
+        if (values.isEmpty()) return 0
+        val parsed = parse(file)
+        var changed = 0
+        values.forEach { (name, value) ->
+            require(value.type in SETTING_TYPES) { "Unsupported ES-DE setting type" }
+            val matches = settingElements(parsed.container).filter { it.getAttribute("name") == name }
+            require(matches.size <= 1) { "Duplicate ES-DE setting: $name" }
+            val existing = matches.firstOrNull()
+            if (existing?.tagName == value.type && existing.getAttribute("value") == value.value) return@forEach
+            if (existing != null && existing.tagName != value.type) {
+                existing.parentNode.removeChild(existing)
+            }
+            val target = existing?.takeIf { it.tagName == value.type } ?: parsed.document.createElement(value.type).also {
+                it.setAttribute("name", name)
+                parsed.container.appendChild(it)
+            }
+            target.setAttribute("value", value.value)
+            changed++
+        }
+        if (changed > 0) write(file, parsed)
+        return changed
+    }
+
+    fun mergeCommaSeparated(file: File, name: String, additions: Set<String>): Int {
+        val current = read(file, setOf(name))[name]
+        val values = current?.value?.split(',')?.map { it.trim() }?.filter { it.isNotBlank() }?.toMutableList()
+            ?: mutableListOf()
+        val oldSize = values.size
+        additions.sorted().forEach { if (it !in values) values += it }
+        if (values.size == oldSize) return 0
+        return apply(file, mapOf(name to XmlSetting("string", values.joinToString(","))))
+    }
+
     fun isLegacyGamelistLocationEnabled(file: File): Boolean {
         val parsed = parse(file)
         return boolElements(parsed.container)
@@ -54,6 +105,10 @@ class EsdeSettingsEditor {
         setFeature(factory, "http://xml.org/sax/features/external-parameter-entities", false)
         val document = factory.newDocumentBuilder().apply {
             setEntityResolver { _, _ -> throw SAXException("External entities are forbidden") }
+            setErrorHandler(object : DefaultHandler() {
+                override fun error(error: SAXParseException) = throw error
+                override fun fatalError(error: SAXParseException) = throw error
+            })
         }.parse(InputSource(StringReader("<$WRAPPER_TAG>$source</$WRAPPER_TAG>")))
         val wrapper = document.documentElement ?: throw SAXException("Missing ES-DE settings content")
         val topLevelElements = (0 until wrapper.childNodes.length)
@@ -98,6 +153,16 @@ class EsdeSettingsEditor {
         return if (root.tagName == "bool") listOf(root) + descendants else descendants
     }
 
+    private fun settingElements(root: Element): List<Element> {
+        val result = mutableListOf<Element>()
+        if (root.tagName in SETTING_TYPES) result += root
+        SETTING_TYPES.forEach { type ->
+            val nodes = root.getElementsByTagName(type)
+            result += (0 until nodes.length).mapNotNull { nodes.item(it) as? Element }
+        }
+        return result.distinct()
+    }
+
     private fun setFeature(factory: DocumentBuilderFactory, name: String, enabled: Boolean) {
         runCatching { factory.setFeature(name, enabled) }
     }
@@ -121,6 +186,7 @@ class EsdeSettingsEditor {
         const val LEGACY_SETTING = "LegacyGamelistFileLocation"
         const val MAX_SETTINGS_BYTES = 2L * 1024L * 1024L
         private const val WRAPPER_TAG = "esde-settings-fragment"
+        private val SETTING_TYPES = setOf("bool", "int", "float", "string")
         private val XML_DECLARATION = Regex("^\\s*<\\?xml[^?]*\\?>", RegexOption.IGNORE_CASE)
         private val SERIALIZED_NODE_TYPES = setOf(
             Node.ELEMENT_NODE,

@@ -9,8 +9,8 @@
         android:useLevel="true" >                      <!-- Fixes issue on API 21 -->
         <gradient
             android:angle="0"
-            android:endColor="#76ff03"
-            android:startColor="#76ff03"
+            android:endColor="#74BF6C"
+            android:startColor="#74BF6C"
             android:type="sweep"
             android:useLevel="false" />
     </shape>

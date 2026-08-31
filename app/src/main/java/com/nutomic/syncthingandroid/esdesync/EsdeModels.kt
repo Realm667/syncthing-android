@@ -9,9 +9,11 @@ data class EsdeMetadata(
     @SerializedName("playtime") val playtime: Long? = null,
     @SerializedName("lastplayed") val lastplayed: String? = null,
     @SerializedName("altemulator") val altemulator: String? = null,
+    @SerializedName("players") val players: String? = null,
+    @SerializedName("rating") val rating: Double? = null,
 ) {
     fun isEmpty(): Boolean = favorite == null && completed == null && playcount == null &&
-        playtime == null && lastplayed == null && altemulator == null
+        playtime == null && lastplayed == null && altemulator == null && players == null && rating == null
 }
 
 data class EsdeGameState(
@@ -23,12 +25,23 @@ data class EsdeGameState(
     @SerializedName("playtime") val playtime: Long? = null,
     @SerializedName("lastplayed") val lastplayed: String? = null,
     @SerializedName("altemulator") val altemulator: String? = null,
+    @SerializedName("players") val players: String? = null,
+    @SerializedName("rating") val rating: Double? = null,
     @SerializedName("updatedAt") val updatedAt: String? = null,
 ) {
-    fun metadata() = EsdeMetadata(favorite, completed, playcount, playtime, lastplayed, altemulator)
+    fun metadata() = EsdeMetadata(favorite, completed, playcount, playtime, lastplayed, altemulator, players, rating)
 
     companion object {
         const val SCHEMA_VERSION = 1
+    }
+}
+
+object EsdeMetadataValidation {
+    fun isValidPlayers(value: String): Boolean {
+        val match = Regex("^(\\d{1,2})(?:-(\\d{1,2}))?$").matchEntire(value) ?: return false
+        val first = match.groupValues[1].toInt()
+        val last = match.groupValues[2].takeIf { it.isNotEmpty() }?.toInt() ?: first
+        return first in 1..99 && last in first..99
     }
 }
 

@@ -54,6 +54,12 @@ class EsdeSyncStateEvaluatorTest {
             EsdeIgnoreRuleState.CONFLICTING_INCLUDE,
             EsdeIgnoreRules.evaluate(listOf("!**/gamelist.xml", "gamelist.xml")),
         )
+        val includes = listOf("!/snes", "!/snes/**", "*", "gamelist.xml")
+        assertEquals(EsdeIgnoreRuleState.MISSING, EsdeIgnoreRules.evaluate(includes))
+        val corrected = EsdeIgnoreRules.placeIgnoreRuleFirst(includes)
+        assertEquals("gamelist.xml", corrected.first())
+        assertEquals(EsdeIgnoreRuleState.ACTIVE, EsdeIgnoreRules.evaluate(corrected))
+        assertEquals(1, corrected.count { it == "gamelist.xml" })
     }
 
     private fun evaluate(folder: EsdeFolderHealth, connected: Boolean = true) = EsdeSyncStateEvaluator.evaluate(
