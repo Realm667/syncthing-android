@@ -84,6 +84,22 @@ jobs:
       - name: Upload signed artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: signed-${{ inputs.applicationId }}
+          name: syncthing-esde-sync-${{ inputs.buildType }}-apk
+          retention-days: 30
           path: |
             ./*.apk
+      - name: Build summary
+        run: |
+          APK_NAME="$(find . -maxdepth 1 -name '*.apk' -printf '%f\n' | head -n 1)"
+          VERSION="$(echo "$APK_NAME" | sed -nE 's/^syncthing-esde-sync-debug_([^_]+)_.*/\1/p')"
+          APP_ID="${{ inputs.applicationId }}"
+          if [ "${{ inputs.buildType }}" = "debug" ]; then APP_ID="${APP_ID}.debug"; fi
+          {
+            echo "## ✅ Build successful"
+            echo ""
+            echo "- APK generated and signed"
+            echo "- APK: \`${APK_NAME}\`"
+            if [ -n "${VERSION}" ]; then echo "- Version: \`${VERSION}\`"; fi
+            echo "- Application ID: \`${APP_ID}\`"
+            echo "- Commit: \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -564,6 +564,13 @@ public class RestApi {
             null, null, null);
     }
 
+    /** Rescans a single folder for latency-sensitive workflows such as ES-DE Safe Launch. */
+    public void rescanFolder(String folderId) {
+        Log.d(TAG, "rescanFolder '" + folderId + "'");
+        new PostRequest(mContext, mUrl, PostRequest.URI_DB_SCAN, mApiKey,
+            ImmutableMap.of("folder", folderId), null, null);
+    }
+
     /**
      * Revert local folder changes. This is the same as hitting
      * the "Revert local changes" button from the web UI.
@@ -851,11 +858,35 @@ public class RestApi {
      * Requests ignore list for given folder.
      */
     public void getFolderIgnoreList(String folderId, OnResultListener1<FolderIgnoreList> listener) {
+        getFolderIgnoreList(folderId, listener, () -> {});
+    }
+
+    public void getFolderIgnoreList(String folderId, OnResultListener1<FolderIgnoreList> listener,
+                                    Runnable errorListener) {
         new GetRequest(mContext, mUrl, GetRequest.URI_DB_IGNORES, mApiKey,
                 ImmutableMap.of("folder", folderId), result -> {
             FolderIgnoreList folderIgnoreList = mGson.fromJson(result, FolderIgnoreList.class);
             listener.onResult(folderIgnoreList);
-        }, error -> {});
+        }, error -> errorListener.run());
+    }
+
+    /** Performs an uncached folder-status read for launch safety checks. */
+    public void getFreshFolderStatus(String folderId, OnResultListener1<FolderStatus> listener,
+                                     Runnable errorListener) {
+        new GetRequest(mContext, mUrl, GetRequest.URI_DB_STATUS, mApiKey,
+                ImmutableMap.of("folder", folderId), result ->
+                        listener.onResult(mGson.fromJson(result, FolderStatus.class)),
+                error -> errorListener.run());
+    }
+
+    /** Performs an uncached per-folder completion read for a specific remote device. */
+    public void getFreshFolderCompletion(String folderId, String deviceId,
+                                         OnResultListener1<CompletionInfo> listener,
+                                         Runnable errorListener) {
+        new GetRequest(mContext, mUrl, GetRequest.URI_DB_COMPLETION, mApiKey,
+                ImmutableMap.of("folder", folderId, "device", deviceId), result ->
+                        listener.onResult(mGson.fromJson(result, CompletionInfo.class)),
+                error -> errorListener.run());
     }
 
     /**

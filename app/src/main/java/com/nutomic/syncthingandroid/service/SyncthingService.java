@@ -12,6 +12,7 @@ import androidx.annotation.Nullable;
 
 import com.nutomic.syncthingandroid.R;
 import com.nutomic.syncthingandroid.SyncthingApp;
+import com.nutomic.syncthingandroid.esdesync.EsdeSyncCoordinator;
 import com.nutomic.syncthingandroid.http.PollWebGuiAvailableTask;
 import com.nutomic.syncthingandroid.model.Device;
 import com.nutomic.syncthingandroid.model.Folder;
@@ -217,6 +218,9 @@ public class SyncthingService extends Service {
 
     private @Nullable
     EventProcessor mEventProcessor = null;
+
+    private @Nullable
+    EsdeSyncCoordinator mEsdeSyncCoordinator = null;
 
     private @Nullable
     RunConditionMonitor mRunConditionMonitor = null;
@@ -636,7 +640,9 @@ public class SyncthingService extends Service {
         }
 
         if (mEventProcessor == null) {
-            mEventProcessor = new EventProcessor(SyncthingService.this, mRestApi);
+            mEsdeSyncCoordinator = new EsdeSyncCoordinator(SyncthingService.this, mRestApi, mPreferences);
+            mEsdeSyncCoordinator.start();
+            mEventProcessor = new EventProcessor(SyncthingService.this, mRestApi, mEsdeSyncCoordinator);
             mEventProcessor.start();
         }
     }
@@ -699,6 +705,10 @@ public class SyncthingService extends Service {
             mEventProcessor.stop();
             mEventProcessor = null;
         }
+        if (mEsdeSyncCoordinator != null) {
+            mEsdeSyncCoordinator.stop();
+            mEsdeSyncCoordinator = null;
+        }
 
         if (mNotificationHandler != null) {
             mNotificationHandler.cancelRestartNotification();
@@ -730,6 +740,10 @@ public class SyncthingService extends Service {
     public @Nullable
     RestApi getApi() {
         return mRestApi;
+    }
+
+    public @Nullable EsdeSyncCoordinator getEsdeSyncCoordinator() {
+        return mEsdeSyncCoordinator;
     }
 
     /**

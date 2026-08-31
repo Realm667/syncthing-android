@@ -32,6 +32,13 @@ fun SettingsRootScreen() {
     ) {
         item {
             Preference(
+                title = { Text(stringResource(R.string.esde_sync_settings_title)) },
+                summary = { Text(stringResource(R.string.esde_sync_settings_summary)) },
+                onClick = { navigator.navigateTo(SettingsRoute.Gaming) },
+            )
+        }
+        item {
+            Preference(
                 title = { Text(stringResource(R.string.run_conditions_title)) },
                 summary = { Text(stringResource(R.string.run_conditions_summary)) },
                 onClick = { navigator.navigateTo(SettingsRoute.RunConditions) },

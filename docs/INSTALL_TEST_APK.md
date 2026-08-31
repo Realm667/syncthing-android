@@ -1,0 +1,92 @@
+# Install and test the ES-DE Sync APK
+
+## Get a signed APK from GitHub Actions
+
+1. Open the fork on GitHub and select **Actions**.
+2. Open the newest successful **Build App** run for the branch or pull request.
+3. Under **Artifacts**, download **syncthing-esde-sync-debug-apk**.
+4. Unzip it. The APK is named
+   `syncthing-esde-sync-debug_<version>_<git-sha>.apk` and is retained for 30 days.
+
+Every push, pull request, and manual run executes unit tests, Android lint, the
+native Syncthing build, the Android debug build, stable public debug signing, and
+artifact upload. The public debug key is deliberately untrusted and must never be
+used for a production release.
+
+## Install
+
+On the handheld, copy the APK to local storage, allow “install unknown apps” for
+the file manager, open the APK, and install it. Or use Android platform tools:
+
+```shell
+adb install -r syncthing-esde-sync-debug_<version>_<git-sha>.apk
+```
+
+The stable debug signature permits `adb install -r` upgrades. The package is
+`com.github.danielgimmer.syncthingesdesync.debug`, so it does not overwrite the
+official Syncthing-Fork.
+
+## Critical parallel-install warning
+
+Do **not** let the original app and this fork synchronize the same local folders
+at the same time. Fully stop/disable the original first. This fork intentionally
+creates a separate Syncthing device identity. Add and approve that device on the
+QNAP; identities are never copied automatically.
+
+## First setup
+
+1. Stop the original Syncthing-Fork.
+2. Start **Syncthing-Fork ES-DE Sync**, grant requested storage/notification
+   access, and add the QNAP as a Syncthing peer.
+3. Connect ROM, save, save-state, and ES-DE data folders and wait for the initial
+   sync to finish.
+4. Open **Settings → ES-DE Gaming Sync** and enable the feature.
+5. Select the ES-DE data directory (the directory containing `gamelists`).
+6. Select the installed ES-DE launcher application.
+7. Select the QNAP as **Primary Gaming Sync Device**.
+8. Select only folders that must block launch (typically ROMs, saves, states, and
+   ES-DE data).
+9. Run **Check and add gamelist.xml ignore rule**. Existing ignore lines are
+   preserved. Confirm `gamelist.xml` is ignored on every participating device.
+10. If synchronized sidecars already exist, let the automatic import finish. If
+    none exist anywhere, choose exactly one current device and explicitly press
+    **Use this device as initial metadata source**.
+11. Open the separate **ES-DE Safe Launch** icon and wait for **SAFE TO PLAY**.
+
+## Safe first test
+
+Use copies/backups and only three SNES games: Chrono Trigger, Super Mario World,
+and Zelda. On device A, fully sync, Safe Launch, mark Chrono Trigger favorite,
+play briefly, exit ES-DE, and wait for **SAFE TO SWITCH DEVICE**. Verify
+`.esde-sync/Chrono Trigger.sfc.esde.json` exists.
+
+On device B, use Safe Launch and verify favorite, play count, play time, last
+played, and alternate emulator match. Also change Zelda on A and Chrono Trigger
+on B in sequence: they must update independent sidecars and never create a
+`gamelist.sync-conflict-*` file.
+
+When the QNAP is unavailable, use **Start without sync** only deliberately. The
+app keeps local changes pending; fully synchronize this handheld before playing
+on another one.
+
+## Local build
+
+Prerequisites match the checked-in catalog: Java 21, Android SDK 37, Android NDK
+29.0.14206865, Go 1.27.0, Python 3.11+, and Git submodules.
+
+```shell
+git clone --recurse-submodules <your-fork-url>
+cd syncthing-android
+./gradlew testDebugUnitTest lintDebug buildNative assembleDebug
+```
+
+On Windows use `gradlew.bat` with the same tasks. Upstream deliberately makes the
+debug variant unsigned; GitHub Actions applies the stable public test signature.
+
+## Rollback
+
+Disable **ES-DE Gaming Sync**. Observers stop and normal Syncthing operation is
+independent of the bridge. Local gamelists and private backups remain. Sidecars
+may remain in synchronized folders and are ignored by the disabled integration;
+nothing is deleted automatically. Re-enable the original app only after this
+fork is fully stopped.

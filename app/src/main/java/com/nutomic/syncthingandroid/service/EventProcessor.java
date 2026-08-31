@@ -25,6 +25,7 @@ import com.google.gson.JsonObject;
 
 import com.nutomic.syncthingandroid.R;
 import com.nutomic.syncthingandroid.SyncthingApp;
+import com.nutomic.syncthingandroid.esdesync.EsdeSyncCoordinator;
 import com.nutomic.syncthingandroid.model.Device;
 import com.nutomic.syncthingandroid.model.Event;
 import com.nutomic.syncthingandroid.model.Folder;
@@ -65,14 +66,16 @@ public class EventProcessor implements  Runnable, RestApi.OnReceiveEventListener
 
     private final Context mContext;
     private final RestApi mRestApi;
+    private final EsdeSyncCoordinator mEsdeSyncCoordinator;
     @Inject SharedPreferences mPreferences;
     @Inject NotificationHandler mNotificationHandler;
 
-    public EventProcessor(Context context, RestApi restApi) {
+    public EventProcessor(Context context, RestApi restApi, EsdeSyncCoordinator esdeSyncCoordinator) {
         ((SyncthingApp) context.getApplicationContext()).component().inject(this);
         ENABLE_VERBOSE_LOG = AppPrefs.getPrefVerboseLog(mPreferences);
         mContext = context;
         mRestApi = restApi;
+        mEsdeSyncCoordinator = esdeSyncCoordinator;
     }
 
     @Override
@@ -190,6 +193,9 @@ public class EventProcessor implements  Runnable, RestApi.OnReceiveEventListener
                         mRestApi.setLocalFolderLastItemFinished(folderId, action, relativeFilePath, event.time);
                     }
                     onItemFinished(action, error, folderType, folderPath + File.separator + relativeFilePath);
+                    if (TextUtils.isEmpty(error) && mEsdeSyncCoordinator != null) {
+                        mEsdeSyncCoordinator.onRemoteSidecarChanged(folderPath + File.separator + relativeFilePath);
+                    }
                 } else {
                     Log.w(TAG, "ItemFinished: Failed to determine folder.path for folder.id=\"" + (TextUtils.isEmpty(folderId) ? "" : folderId) + "\"");
                 }

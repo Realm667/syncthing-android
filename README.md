@@ -25,6 +25,30 @@ Our knowledge base is published [here](wiki#readme).
 
 See [detailed info](wiki/developers/Building-and-Development.md).
 
+## ES-DE Gaming Sync
+
+This fork adds an opt-in metadata bridge for Android retro-gaming handhelds.
+ES-DE normally stores every game's mutable state for a system in one
+`gamelist.xml`; synchronizing that file from multiple handhelds creates coarse
+file conflicts. The bridge keeps every `gamelist.xml` local and ignored, then
+synchronizes one small `.esde.json` sidecar per game instead.
+
+Version 1 synchronizes `favorite`, `completed`, `playcount`, `playtime`,
+`lastplayed`, and the exact opaque `altemulator` value. Missing sidecar fields do
+not erase local values. ES-DE Safe Launch checks the selected Syncthing folders
+and primary device before play, imports metadata, starts the chosen ES-DE app,
+then exports and synchronizes changes after return. When the primary device is
+unavailable, **Start without sync** remains available and marks local changes as
+pending until a later successful synchronization.
+
+Read [the architecture](docs/ESDE_SYNC_ARCHITECTURE.md), [implementation plan](docs/ESDE_SYNC_IMPLEMENTATION_PLAN.md),
+and [test APK installation guide](docs/INSTALL_TEST_APK.md) before enabling it.
+
+> **Do not run this fork and the original Syncthing-Fork against the same local
+> folders at the same time.** Stop or disable the original app first. This fork
+> has its own application ID and Syncthing device identity; authorize that new
+> device separately on your NAS.
+
 ## Acknowledgments
 
 This project was forked from [syncthing/syncthing-android](https://github.com/syncthing/syncthing-android).

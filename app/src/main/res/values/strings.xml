@@ -1,9 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
 
-    <string name="app_name">Syncthing-Fork</string>
+    <string name="app_name">Syncthing-Fork ES-DE Sync</string>
+    <string name="esde_app_name" translatable="false">Syncthing-Fork ES-DE Sync</string>
 
     <string name="app_description">An open, trustworthy and decentralized file synchronization application.</string>
+    <string name="esde_safe_launch_title">ES-DE Safe Launch</string>
+    <string name="esde_sync_settings_title">ES-DE Gaming Sync</string>
+    <string name="esde_sync_settings_summary">Granular game metadata and safe device switching</string>
+    <string name="esde_sync_enable">Enable ES-DE Gaming Sync</string>
+    <string name="esde_sync_enable_summary">When disabled, no ES-DE files are observed or modified</string>
+    <string name="esde_sync_directory">ES-DE data directory</string>
+    <string name="esde_sync_application">ES-DE application</string>
+    <string name="esde_sync_primary_device">Primary Gaming Sync Device</string>
+    <string name="esde_sync_folders">Gaming Sync Folders</string>
+    <string name="esde_sync_not_selected">Not selected</string>
+    <string name="esde_sync_ignore_check">Check and add gamelist.xml ignore rule</string>
+    <string name="esde_sync_initialize">Use this device as initial metadata source</string>
+    <string name="esde_sync_import_now">Import metadata now</string>
+    <string name="esde_sync_export_now">Export metadata now</string>
+    <string name="esde_sync_diagnostics">ES-DE Sync diagnostics</string>
 
     <!-- FirstStartActivity -->
 

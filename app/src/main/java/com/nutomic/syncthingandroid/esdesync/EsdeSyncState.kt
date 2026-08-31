@@ -1,0 +1,87 @@
+package com.nutomic.syncthingandroid.esdesync
+
+enum class EsdeSyncState {
+    NOT_CONFIGURED,
+    STARTING,
+    WAITING_FOR_PRIMARY,
+    RESCANNING,
+    SYNCING,
+    IMPORTING_METADATA,
+    READY_TO_PLAY,
+    OFFLINE_OVERRIDE,
+    ESDE_RUNNING,
+    EXPORTING_METADATA,
+    SYNCING_AFTER_PLAY,
+    SAFE_TO_SWITCH,
+    ERROR,
+}
+
+data class EsdeFolderHealth(
+    val id: String,
+    val paused: Boolean,
+    val state: String,
+    val error: String,
+    val needFiles: Long,
+    val needBytes: Long,
+    val needTotalItems: Long,
+    val pullErrors: Long,
+    val remoteCompletion: Int,
+    val remoteNeedBytes: Double,
+    val conflicts: Int,
+    val remoteNeedItems: Long = 0,
+    val remoteState: String = "valid",
+)
+
+data class EsdeGateInput(
+    val configured: Boolean,
+    val serviceActive: Boolean,
+    val primaryConnected: Boolean,
+    val primaryPaused: Boolean,
+    val folders: List<EsdeFolderHealth>,
+)
+
+object EsdeSyncStateEvaluator {
+    fun evaluate(input: EsdeGateInput): EsdeSyncState {
+        if (!input.configured) return EsdeSyncState.NOT_CONFIGURED
+        if (!input.serviceActive) return EsdeSyncState.STARTING
+        if (!input.primaryConnected || input.primaryPaused) return EsdeSyncState.WAITING_FOR_PRIMARY
+        if (input.folders.isEmpty()) return EsdeSyncState.NOT_CONFIGURED
+        if (input.folders.any { it.error.isNotBlank() || it.pullErrors > 0 || it.conflicts > 0 }) {
+            return EsdeSyncState.ERROR
+        }
+        if (input.folders.any { it.paused }) return EsdeSyncState.ERROR
+        if (input.folders.any {
+                it.state != "idle" || it.needFiles > 0 || it.needBytes > 0 || it.needTotalItems > 0 ||
+                    it.remoteCompletion < 100 || it.remoteNeedBytes > 0.0 || it.remoteNeedItems > 0 ||
+                    it.remoteState != "valid"
+            }) return EsdeSyncState.SYNCING
+        return EsdeSyncState.READY_TO_PLAY
+    }
+}
+
+enum class EsdeBootstrapAction { IMPORT_EXISTING, REQUIRE_SOURCE_CONFIRMATION, START_OBSERVING }
+
+object EsdeBootstrapEvaluator {
+    fun evaluate(bootstrapComplete: Boolean, sidecarsExist: Boolean): EsdeBootstrapAction = when {
+        bootstrapComplete -> EsdeBootstrapAction.START_OBSERVING
+        sidecarsExist -> EsdeBootstrapAction.IMPORT_EXISTING
+        else -> EsdeBootstrapAction.REQUIRE_SOURCE_CONFIRMATION
+    }
+}
+
+enum class EsdeIgnoreRuleState { ACTIVE, MISSING, CONFLICTING_INCLUDE }
+
+object EsdeIgnoreRules {
+    fun evaluate(lines: Collection<String>): EsdeIgnoreRuleState {
+        lines.forEach { raw ->
+            var line = raw.trim()
+            while (line.startsWith("(?i)") || line.startsWith("(?d)")) line = line.drop(4)
+            val included = line.startsWith('!')
+            if (included) line = line.drop(1)
+            if (line == "gamelist.xml" || line == "**/gamelist.xml") {
+                return if (included) EsdeIgnoreRuleState.CONFLICTING_INCLUDE else EsdeIgnoreRuleState.ACTIVE
+            }
+        }
+        return EsdeIgnoreRuleState.MISSING
+    }
+}

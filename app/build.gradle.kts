@@ -39,6 +39,7 @@ dependencies {
     implementation(libs.zhanghai.compose.preference)
     implementation(libs.zxing.android.embedded) { isTransitive = false }
     implementation(libs.zxing.core)
+    testImplementation(libs.junit)
     ksp(libs.dagger.compiler)
 }
 
@@ -58,7 +59,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.github.catfriend1.syncthingfork"
+        applicationId = "com.github.danielgimmer.syncthingesdesync"
         minSdk = libs.versions.min.sdk.get().toInt()
         targetSdk = libs.versions.target.sdk.get().toInt()
         versionCode = libs.versions.version.code.get().toInt()

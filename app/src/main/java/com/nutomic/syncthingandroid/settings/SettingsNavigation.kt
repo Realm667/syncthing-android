@@ -46,6 +46,10 @@ sealed interface SettingsRoute : NavKey {
     @Serializable
     data object Experimental : SettingsRoute
     @Serializable
+    data object Gaming : SettingsRoute
+    @Serializable
+    data object GamingDiagnostics : SettingsRoute
+    @Serializable
     data object About : SettingsRoute
     @Serializable
     data object Licenses : SettingsRoute
@@ -64,6 +68,8 @@ sealed interface SettingsRoute : NavKey {
             "ImportExport" -> ImportExport
             "Troubleshooting" -> Troubleshooting
             "Experimental" -> Experimental
+            "Gaming" -> Gaming
+            "GamingDiagnostics" -> GamingDiagnostics
             "About" -> About
             "Licenses" -> Licenses
             "Root" -> Root
@@ -119,6 +125,8 @@ fun SettingsNavDisplay(
             settingsImportExportEntry()
             settingsTroubleshootingEntry()
             settingsExperimentalEntry()
+            settingsGamingEntry()
+            settingsGamingDiagnosticsEntry()
             settingsAboutEntry()
             licensesEntry()
         },

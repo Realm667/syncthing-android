@@ -187,7 +187,7 @@ jobs:
           set -eu
           unset ANDROID_NDK_HOME
           git config --global --add safe.directory '*'
-          ./gradlew --no-daemon buildNative lint${{ inputs.buildType }} assemble${{ inputs.buildType }} ${{ inputs.gradleOptions }}
+          ./gradlew --no-daemon buildNative test${{ inputs.buildType }}UnitTest lint${{ inputs.buildType }} assemble${{ inputs.buildType }} ${{ inputs.gradleOptions }}
 
       - name: Save prebuilt native libraries to cache
         run: |
@@ -230,7 +230,7 @@ jobs:
           fi
           COMMIT_HASH_SHORT=$(echo "${COMMIT_HASH_LONG}" | cut -c1-7)
           cd "app/build/outputs/apk/debug"
-          mv "app-debug-unsigned.apk" "${{ env.APPLICATION_ID }}.debug_v${{ env.VERSION }}_${COMMIT_HASH_SHORT}.apk"
+          mv "app-debug-unsigned.apk" "syncthing-esde-sync-debug_${{ env.VERSION }}_${COMMIT_HASH_SHORT}.apk"
 
       - name: Rename unsigned release artifacts
         if: ${{ inputs.buildType == 'Release' }}
