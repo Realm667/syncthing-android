@@ -151,24 +151,9 @@ class EsdeSyncCoordinator(
     }
 
     fun ensureLegacyGamelistLocation(callback: (Boolean, String) -> Unit = { _, _ -> }) {
-        executor.execute {
-            val result = runCatching {
-                if (!settings.usesLegacyGamelistLocation()) {
-                    return@runCatching "Central ES-DE gamelist location is selected"
-                }
-                val settingsFile = esdeSettingsFile()
-                val backup = File(appContext.filesDir, "esde-sync/backups/settings/es_settings.xml")
-                if (!backup.isFile) {
-                    AtomicFileWriter.write(backup) { output -> settingsFile.inputStream().use { it.copyTo(output) } }
-                }
-                val changed = EsdeSettingsEditor().enableLegacyGamelistLocation(settingsFile)
-                if (changed) "Enabled LegacyGamelistFileLocation in es_settings.xml"
-                else "LegacyGamelistFileLocation is already enabled"
-            }
-            result.onFailure { recordError("Could not configure ES-DE ROM gamelists", it) }
-            mainHandler.post {
-                callback(result.isSuccess, result.getOrElse { it.message ?: "Unknown ES-DE settings error" })
-            }
+        EsdeLegacyGamelistConfigurator.ensure(appContext, settings) { success, message ->
+            if (!success) recordError("Could not configure ES-DE ROM gamelists", IllegalStateException(message))
+            callback(success, message)
         }
     }
 
@@ -245,14 +230,6 @@ class EsdeSyncCoordinator(
     }
 
     private fun gamelistsDirectory(): File = File(settings.gamelistDirectory)
-
-    private fun esdeSettingsFile(): File {
-        val root = File(settings.esdeDirectory).canonicalFile
-        val file = File(root, "settings/es_settings.xml").canonicalFile
-        val prefix = root.path.trimEnd(File.separatorChar) + File.separator
-        require(file.path.startsWith(prefix)) { "ES-DE settings file escaped its configured root" }
-        return file
-    }
 
     private fun isInsideGamelists(file: File): Boolean = runCatching {
         EsdeGamelistLocator(gamelistsDirectory()).contains(file)

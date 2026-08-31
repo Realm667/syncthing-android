@@ -33,6 +33,8 @@ import androidx.preference.PreferenceManager
 import com.nutomic.syncthingandroid.R
 import com.nutomic.syncthingandroid.activities.FolderPickerActivity
 import com.nutomic.syncthingandroid.esdesync.EsdeIgnoreRuleManager
+import com.nutomic.syncthingandroid.esdesync.EsdeLegacyGamelistConfigurator
+import com.nutomic.syncthingandroid.esdesync.EsdeSafeLaunchActivity
 import com.nutomic.syncthingandroid.esdesync.EsdeSyncSettings
 import com.nutomic.syncthingandroid.model.Device
 import com.nutomic.syncthingandroid.model.Folder
@@ -153,16 +155,22 @@ fun SettingsGamingScreen() {
             )
         }
         item {
+            val legacyRequired = settings.usesLegacyGamelistLocation()
+            val legacySummary = when {
+                !enabled.value -> "Enable ES-DE Gaming Sync first"
+                directory.isBlank() || gamelistDirectory.isBlank() -> "Select both directories first"
+                !legacyRequired -> "Not required for the central ES-DE/gamelists layout"
+                else -> stringResource(R.string.esde_sync_enable_legacy_location_summary)
+            }
             Preference(
                 title = { Text(stringResource(R.string.esde_sync_enable_legacy_location)) },
-                summary = { Text(stringResource(R.string.esde_sync_enable_legacy_location_summary)) },
+                summary = { Text(legacySummary) },
                 onClick = {
-                    service?.esdeSyncCoordinator?.ensureLegacyGamelistLocation { _, message ->
+                    EsdeLegacyGamelistConfigurator.ensure(context, settings) { _, message ->
                         Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                     }
                 },
-                enabled = enabled.value && directory.isNotBlank() && gamelistDirectory.isNotBlank() &&
-                    settings.usesLegacyGamelistLocation() && service?.esdeSyncCoordinator != null,
+                enabled = enabled.value && directory.isNotBlank() && gamelistDirectory.isNotBlank(),
             )
         }
         item {
@@ -232,15 +240,53 @@ fun SettingsGamingScreen() {
         item {
             Preference(
                 title = { Text(stringResource(R.string.esde_sync_import_now)) },
-                onClick = { service?.esdeSyncCoordinator?.importNow() },
+                summary = { Text(stringResource(R.string.esde_sync_import_summary)) },
+                onClick = {
+                    service?.esdeSyncCoordinator?.importNow { result ->
+                        val valid = result.matched + result.unmatched
+                        val message = when {
+                            result.invalid > 0 -> "Import finished: ${result.changedGames} changed, ${result.invalid} invalid sidecar(s)"
+                            valid == 0 -> "No .esde.json sidecars found. On the first device, use ‘Use this device as initial metadata source’."
+                            else -> "Import finished: ${result.matched} matched, ${result.changedGames} changed, ${result.unmatched} unmatched"
+                        }
+                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                    }
+                },
                 enabled = enabled.value && service?.esdeSyncCoordinator != null,
             )
         }
         item {
             Preference(
                 title = { Text(stringResource(R.string.esde_sync_export_now)) },
-                onClick = { service?.esdeSyncCoordinator?.exportNow() },
+                summary = { Text(stringResource(R.string.esde_sync_export_summary)) },
+                onClick = {
+                    service?.esdeSyncCoordinator?.exportNow { result ->
+                        Toast.makeText(
+                            context,
+                            "Export finished: ${result.gamesRead} games read, ${result.sidecarsWritten} sidecar(s) written",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                },
                 enabled = enabled.value && service?.esdeSyncCoordinator != null && settings.bootstrapComplete,
+            )
+        }
+        item {
+            Preference(
+                title = { Text(stringResource(R.string.esde_sync_open_safe_launch)) },
+                summary = { Text(stringResource(R.string.esde_sync_open_safe_launch_summary)) },
+                onClick = { context.startActivity(Intent(context, EsdeSafeLaunchActivity::class.java)) },
+            )
+        }
+        item {
+            Preference(
+                title = { Text(stringResource(R.string.esde_sync_choose_home)) },
+                summary = { Text(stringResource(R.string.esde_sync_choose_home_summary)) },
+                onClick = {
+                    val intent = Intent(Settings.ACTION_HOME_SETTINGS)
+                    runCatching { context.startActivity(intent) }
+                        .onFailure { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
+                },
             )
         }
         item {

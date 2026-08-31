@@ -97,10 +97,17 @@ restored configuration and continues without generating a new identity.
 11. If synchronized sidecars already exist, let the automatic import finish. If
     none exist anywhere, choose exactly one current device and explicitly press
     **Use this device as initial metadata source**.
-12. Open the separate **ES-DE Safe Launch** icon, or select it as Android's Home
-    app, and wait for **SAFE TO PLAY**.
+12. Open the separate **ES-DE Safe Launch** icon or use **Open ES-DE Safe
+    Launch** in Gaming Sync settings if the device launcher collapses both app
+    icons. In Android's Home picker the Safe Launch entry may be displayed as
+    **Syncthing-Fork ES-DE Sync**; select that entry and wait for **SAFE TO
+    PLAY**.
 13. In Android App info, turn off **Pause app activity if unused**. Android keeps
     this user-controlled and does not let the APK disable it during installation.
+
+**Import metadata now** only applies sidecars that already exist. On the first
+device, use **Use this device as initial metadata source** instead; the app now
+reports both zero-result imports and successful import/export counts visibly.
 
 ## Safe first test
 

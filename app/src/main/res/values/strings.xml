@@ -15,6 +15,12 @@
     <string name="esde_sync_gamelist_directory_summary">Select ROMs for /ROMs/&lt;system&gt;/gamelist.xml, or ES-DE/gamelists for the central layout</string>
     <string name="esde_sync_enable_legacy_location">Configure ES-DE to use ROM gamelists</string>
     <string name="esde_sync_enable_legacy_location_summary">Safely sets LegacyGamelistFileLocation=true in settings/es_settings.xml</string>
+    <string name="esde_sync_open_safe_launch">Open ES-DE Safe Launch</string>
+    <string name="esde_sync_open_safe_launch_summary">Open the synchronization gate even when your launcher hides its second app icon</string>
+    <string name="esde_sync_choose_home">Choose Safe Launch as Home app</string>
+    <string name="esde_sync_choose_home_summary">Your device may display it as “Syncthing-Fork ES-DE Sync”; that Home entry opens Safe Launch</string>
+    <string name="esde_sync_import_summary">Apply synchronized .esde.json sidecars to the local gamelist.xml files</string>
+    <string name="esde_sync_export_summary">Write changed local metadata to per-game .esde.json sidecars</string>
     <string name="esde_sync_unused_app_settings">Android background reliability</string>
     <string name="esde_sync_unused_app_settings_summary">Open App info and turn off “Pause app activity if unused”</string>
     <string name="esde_sync_application">ES-DE application</string>

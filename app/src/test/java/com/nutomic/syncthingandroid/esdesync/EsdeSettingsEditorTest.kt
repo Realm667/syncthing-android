@@ -1,6 +1,7 @@
 package com.nutomic.syncthingandroid.esdesync
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -44,5 +45,25 @@ class EsdeSettingsEditorTest {
         assertThrows(SAXException::class.java) {
             EsdeSettingsEditor().enableLegacyGamelistLocation(file)
         }
+    }
+
+    @Test fun configuratorBacksUpSettingsBeforeEnablingLegacyLocation() {
+        val appFiles = temporary.newFolder("app-files")
+        val esde = temporary.newFolder("ES-DE")
+        val settingsDirectory = java.io.File(esde, "settings").apply { mkdirs() }
+        val file = java.io.File(settingsDirectory, "es_settings.xml").apply {
+            writeText("<settings><bool name=\"LegacyGamelistFileLocation\" value=\"false\"/></settings>")
+        }
+
+        ensureLegacyGamelistLocationBlocking(appFiles, esde.path, true)
+
+        assertTrue(EsdeSettingsEditor().isLegacyGamelistLocationEnabled(file))
+        val backup = java.io.File(appFiles, "esde-sync/backups/settings/es_settings.xml")
+        assertTrue(backup.isFile)
+        assertTrue(backup.readText().contains("value=\"false\""))
+        assertEquals(
+            "LegacyGamelistFileLocation is already enabled",
+            ensureLegacyGamelistLocationBlocking(appFiles, esde.path, true),
+        )
     }
 }

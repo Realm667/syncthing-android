@@ -49,7 +49,10 @@ unavailable, **Start without sync** remains available and marks local changes as
 pending until a later successful synchronization.
 
 Safe Launch declares Android's Home category, so it can be selected as the Home
-app on handhelds that use ES-DE as their launcher. Android does not allow an app
+app on handhelds that use ES-DE as their launcher. Some Android builds display
+the package label **Syncthing-Fork ES-DE Sync** in the Home picker and collapse
+the second launcher icon; the Gaming Sync settings therefore include direct
+buttons to open Safe Launch and the system Home-app picker. Android does not allow an app
 to disable its own “Pause app activity if unused” protection silently; the
 Gaming Sync settings provide a direct link to App info for that user-controlled
 switch.
