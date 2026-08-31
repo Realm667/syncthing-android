@@ -25,6 +25,7 @@ import com.nutomic.syncthingandroid.SyncthingApp
 import com.nutomic.syncthingandroid.activities.MainActivity
 import com.nutomic.syncthingandroid.activities.ThemedAppCompatActivity
 import com.nutomic.syncthingandroid.esdesync.LegacySyncthingMigration
+import com.nutomic.syncthingandroid.esdesync.EsdeSyncSettings
 import com.nutomic.syncthingandroid.settings.SettingsActivity
 import com.nutomic.syncthingandroid.webgui.WebGuiActivity
 import com.nutomic.syncthingandroid.service.Constants
@@ -300,6 +301,16 @@ class OnboardingActivity : ThemedAppCompatActivity() {
     fun startApp() {
         val startIntoWebGui = prefs.getBoolean(Constants.PREF_START_INTO_WEB_GUI, false)
         val mainIntent = Intent(this, MainActivity::class.java)
+        val esdeSettings = EsdeSyncSettings(prefs)
+        if (!esdeSettings.firstSetupOffered && !esdeSettings.firstSetupComplete) {
+            esdeSettings.firstSetupOffered = true
+            val setupIntent = Intent(this, SettingsActivity::class.java).apply {
+                putExtra(SettingsActivity.EXTRA_START_DESTINATION, "GamingFirstSetup")
+            }
+            startActivities(arrayOf(mainIntent, setupIntent))
+            finish()
+            return
+        }
 
         /*
          * In case start_into_web_gui option is enabled, start both activities

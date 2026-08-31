@@ -96,6 +96,8 @@ root resets bootstrap authority. The default gamelist root is
 their `ROMs` root instead. Before Safe Launch uses that layout, the bridge backs
 up `settings/es_settings.xml` privately and atomically enables
 `LegacyGamelistFileLocation` without removing other ES-DE settings.
+Every layout also enforces `SaveGamelistsMode=always` before launch so metadata is
+persisted while ES-DE is backgrounded for the post-play export.
 
 ## Safe Launch
 
@@ -177,4 +179,6 @@ ES-DE/RetroAchievements configuration.
 - Automatic ES-DE process-exit callbacks do not exist on Android. Returning to
   the still-persisted Safe Launch task is the supported post-sync trigger.
 - Theme availability is verified against user-visible theme resources below the configured ES-DE
-  data directory. A theme bundled only inside a particular ES-DE APK may be conservatively skipped.
+  data directory. Directory IDs, `<themeName>` display names, variant IDs, and variant labels from
+  bounded, securely parsed `capabilities.xml` files are accepted. An unverified theme is skipped
+  with a non-blocking warning and never prevents Safe Launch.

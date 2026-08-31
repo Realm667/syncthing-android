@@ -9,6 +9,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.navigation3.runtime.EntryProviderScope
 import androidx.preference.PreferenceManager
 import com.nutomic.syncthingandroid.esdesync.EsdeGlobalLayout
@@ -54,6 +60,7 @@ fun SettingsGamingSharedStateScreen() {
         title = "Shared Collections & ES-DE Settings",
         description = "Global shared state: <gamelist root>/${EsdeGlobalLayout.DIRECTORY}/. gamelist.xml is never included.",
     ) {
+        item { SharedSectionHeading("Collections") }
         item {
             SwitchPreference(
                 title = { Text("Shared Collections") },
@@ -83,6 +90,7 @@ fun SettingsGamingSharedStateScreen() {
                 onClick = { service?.esdeSyncCoordinator?.publishSharedCollections { show(it.summary("Collections publish")) } },
             )
         }
+        item { SharedSectionHeading("ES-DE Settings Categories") }
         item {
             Preference(
                 title = { Text("Import shared collections now") },
@@ -134,6 +142,7 @@ fun SettingsGamingSharedStateScreen() {
                 )
             }
         }
+        item { SharedSectionHeading("Transfer & Conflict Safety") }
         item {
             Preference(
                 title = { Text("Publish this device's ES-DE settings") },
@@ -160,6 +169,7 @@ fun SettingsGamingSharedStateScreen() {
         item { Preference(title = { Text("Skipped values") }, summary = { Text(preferences.getInt(EsdeSyncSettings.PREF_LAST_SHARED_SKIPPED, 0).toString()) }) }
         item { Preference(title = { Text("Conflicts") }, summary = { Text(preferences.getString(EsdeSyncSettings.PREF_LAST_SHARED_CONFLICTS, "")?.ifBlank { "None" } ?: "None") }) }
         item { Preference(title = { Text("Validation errors") }, summary = { Text(preferences.getString(EsdeSyncSettings.PREF_LAST_SHARED_ERRORS, "")?.ifBlank { "None" } ?: "None") }) }
+        item { Preference(title = { Text("Warnings") }, summary = { Text(preferences.getString(EsdeSyncSettings.PREF_LAST_SHARED_WARNINGS, "")?.ifBlank { "None" } ?: "None") }) }
         item {
             Preference(
                 title = { Text("Conflict behavior") },
@@ -167,4 +177,14 @@ fun SettingsGamingSharedStateScreen() {
             )
         }
     }
+}
+
+@Composable
+private fun SharedSectionHeading(title: String) {
+    Text(
+        title.uppercase(),
+        modifier = Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 4.dp),
+        color = Color(0xFF9C001E),
+        fontWeight = FontWeight.Bold,
+    )
 }

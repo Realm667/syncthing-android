@@ -57,6 +57,14 @@ to disable its own “Pause app activity if unused” protection silently; the
 Gaming Sync settings provide a direct link to App info for that user-controlled
 switch.
 
+On a fresh installation, a resumable **First Setup** wizard guides the device role,
+ES-DE and gamelist roots, primary Syncthing device, Gaming Sync folders, shared
+content categories, ignore protection, and Safe Launch/Home integration. SafeSync
+automatically enforces `SaveGamelistsMode=always`, enables the legacy ROM gamelist
+location only when required, and prevents a receiving device from seeding shared
+state from fresh defaults. After play, return to ES-DE and press Home, then keep the
+Safe Launch screen open until **SAFE TO SWITCH DEVICE** is shown.
+
 Read [the architecture](docs/ESDE_SYNC_ARCHITECTURE.md), [implementation plan](docs/ESDE_SYNC_IMPLEMENTATION_PLAN.md),
 and [test APK installation guide](docs/INSTALL_TEST_APK.md) before enabling it.
 

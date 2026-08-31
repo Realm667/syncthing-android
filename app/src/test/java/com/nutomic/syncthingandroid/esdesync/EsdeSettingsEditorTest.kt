@@ -74,15 +74,28 @@ class EsdeSettingsEditorTest {
             writeText("<settings><bool name=\"LegacyGamelistFileLocation\" value=\"false\"/></settings>")
         }
 
-        ensureLegacyGamelistLocationBlocking(appFiles, esde.path, true)
+        ensureRequiredEsdeSettingsBlocking(appFiles, esde.path, true)
 
         assertTrue(EsdeSettingsEditor().isLegacyGamelistLocationEnabled(file))
+        assertEquals(
+            "always",
+            EsdeSettingsEditor().read(file, setOf("SaveGamelistsMode"))["SaveGamelistsMode"]?.value,
+        )
         val backup = java.io.File(appFiles, "esde-sync/backups/settings/es_settings.xml")
         assertTrue(backup.isFile)
         assertTrue(backup.readText().contains("value=\"false\""))
         assertEquals(
-            "LegacyGamelistFileLocation is already enabled",
-            ensureLegacyGamelistLocationBlocking(appFiles, esde.path, true),
+            "Required ES-DE settings are active",
+            ensureRequiredEsdeSettingsBlocking(appFiles, esde.path, true),
         )
+    }
+
+    @Test fun immediateSavingIsRequiredForCentralGamelistsToo() {
+        val file = temporary.newFile("es_settings.xml").apply {
+            writeText("<settings><string name=\"SaveGamelistsMode\" value=\"on exit\"/></settings>")
+        }
+        assertEquals(1, EsdeSettingsEditor().ensureSafeSyncRequirements(file, false))
+        assertEquals("always", EsdeSettingsEditor().read(file, setOf("SaveGamelistsMode"))["SaveGamelistsMode"]?.value)
+        assertFalse(file.readText().contains("LegacyGamelistFileLocation"))
     }
 }

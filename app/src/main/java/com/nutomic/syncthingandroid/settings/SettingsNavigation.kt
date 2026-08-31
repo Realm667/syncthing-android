@@ -48,6 +48,8 @@ sealed interface SettingsRoute : NavKey {
     @Serializable
     data object Gaming : SettingsRoute
     @Serializable
+    data object GamingFirstSetup : SettingsRoute
+    @Serializable
     data object GamingDiagnostics : SettingsRoute
     @Serializable
     data object GamingSharedState : SettingsRoute
@@ -71,6 +73,7 @@ sealed interface SettingsRoute : NavKey {
             "Troubleshooting" -> Troubleshooting
             "Experimental" -> Experimental
             "Gaming" -> Gaming
+            "GamingFirstSetup" -> GamingFirstSetup
             "GamingDiagnostics" -> GamingDiagnostics
             "GamingSharedState" -> GamingSharedState
             "About" -> About
@@ -129,6 +132,7 @@ fun SettingsNavDisplay(
             settingsTroubleshootingEntry()
             settingsExperimentalEntry()
             settingsGamingEntry()
+            settingsGamingFirstSetupEntry()
             settingsGamingDiagnosticsEntry()
             settingsGamingSharedStateEntry()
             settingsAboutEntry()

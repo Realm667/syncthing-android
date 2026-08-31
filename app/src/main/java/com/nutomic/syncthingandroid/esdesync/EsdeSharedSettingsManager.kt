@@ -98,6 +98,7 @@ internal class EsdeSharedSettingsManager(
         val completed = mutableMapOf<String, EsdeSharedSnapshot>()
         val conflicts = mutableListOf<String>()
         val errors = mutableListOf<String>()
+        val warnings = mutableListOf<String>()
         var skipped = 0
 
         selected.sorted().forEach { name ->
@@ -110,20 +111,22 @@ internal class EsdeSharedSettingsManager(
                 val spec = EsdeSharedSettingsCatalog.requireAllowed(name)
                 require(shared.type == spec.type) { "$name has wrong profile type" }
                 val sharedValue = spec.normalize(shared.value)
-                if (name == "Theme" && !themeExists(sharedValue)) {
-                    errors += "$name (theme is not installed locally)"
-                    return@forEach
-                }
-                if (name == "ThemeVariant" && !themeVariantExists(sharedValue, changes, local)) {
-                    errors += "$name (theme variant is not installed locally)"
-                    return@forEach
-                }
                 val sharedHash = valueHash(spec.type, sharedValue)
                 val current = local[name]
                 val localHash = current?.let { valueHash(it.type, it.value) }
                 if (localHash == sharedHash) {
                     skipped++
                     completed[name] = EsdeSharedSnapshot(sharedHash, sharedHash)
+                    return@forEach
+                }
+                if (name == "Theme" && !themeExists(sharedValue)) {
+                    skipped++
+                    warnings += "$name was not found locally and was left unchanged"
+                    return@forEach
+                }
+                if (name == "ThemeVariant" && !themeVariantExists(sharedValue, changes, local)) {
+                    skipped++
+                    warnings += "$name was not found locally and was left unchanged"
                     return@forEach
                 }
                 val snapshot = snapshots.load("settings", name)
@@ -145,7 +148,7 @@ internal class EsdeSharedSettingsManager(
             editor.apply(settingsFile, changes)
         }
         completed.forEach { (name, snapshot) -> snapshots.save("settings", name, snapshot) }
-        return EsdeSharedOperationResult(selected.size, changes.size, skipped, conflicts, errors)
+        return EsdeSharedOperationResult(selected.size, changes.size, skipped, conflicts, errors, warnings)
     }
 
     private fun readProfile(): EsdeSharedSettingsProfile {
@@ -196,7 +199,7 @@ internal class EsdeSharedSettingsManager(
         else -> value
     }
 
-    private fun themeExists(theme: String): Boolean = theme.isBlank() || safeThemeDirectory(theme)?.isDirectory == true
+    private fun themeExists(theme: String): Boolean = theme.isBlank() || EsdeThemeCatalog(esdeRoot).find(theme) != null
 
     private fun themeVariantExists(
         variant: String,
@@ -205,23 +208,8 @@ internal class EsdeSharedSettingsManager(
     ): Boolean {
         if (variant.isBlank()) return true
         val theme = pending["Theme"]?.value ?: local["Theme"]?.value ?: return false
-        val directory = safeThemeDirectory(theme)?.takeIf { it.isDirectory } ?: return false
-        return directory.walkTopDown().filter { it.isFile && it.extension.equals("xml", true) }
-            .take(MAX_THEME_FILES).any { file ->
-                file.length() <= MAX_THEME_FILE_BYTES && runCatching {
-                    file.readText().contains(variant)
-                }.getOrDefault(false)
-            }
+        return EsdeThemeCatalog(esdeRoot).find(theme)?.hasVariant(variant) == true
     }
-
-    private fun safeThemeDirectory(theme: String): File? = runCatching {
-        require(theme.matches(Regex("^[A-Za-z0-9._ -]{1,160}$")) && theme != "." && theme != "..")
-        val root = File(esdeRoot, "themes")
-        val result = File(root, theme)
-        val prefix = root.canonicalPath.trimEnd(File.separatorChar) + File.separator
-        require(result.canonicalPath.startsWith(prefix))
-        result
-    }.getOrNull()
 
     private fun valueHash(type: String, value: String): String = EsdeHashes.text("$type\u0000$value")
 
@@ -238,7 +226,5 @@ internal class EsdeSharedSettingsManager(
 
     companion object {
         const val MAX_PROFILE_BYTES = 256L * 1024L
-        private const val MAX_THEME_FILES = 128
-        private const val MAX_THEME_FILE_BYTES = 1024L * 1024L
     }
 }

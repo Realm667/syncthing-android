@@ -38,7 +38,7 @@ data class EsdeSettingCategory(
 )
 
 object EsdeSharedSettingsCatalog {
-    private val SAFE_THEME_VALUE = Regex("^[A-Za-z0-9._ -]{0,160}$")
+    private val SAFE_THEME_VALUE = Regex("^[A-Za-z0-9._ :&+()!'-]{0,160}$")
     private fun bool(category: String, vararg names: String) = names.map { EsdeSettingSpec(it, "bool", category) }
     private fun string(category: String, vararg names: String) = names.map { EsdeSettingSpec(it, "string", category) }
     private fun integer(category: String, range: IntRange, vararg names: String) =
@@ -49,9 +49,8 @@ object EsdeSharedSettingsCatalog {
     val specs: List<EsdeSettingSpec> = buildList {
         addAll(string("Collections", "CollectionCustomGrouping", "CollectionSystemsAuto", "CollectionSystemsCustom"))
         addAll(bool("Collections", "FavoritesAddButton", "FavoritesFirst", "FavoritesStar", "FavFirstCustom", "FavStarCustom"))
-        addAll(bool("Gamelist and metadata", "LegacyGamelistFileLocation", "AlternativeEmulatorPerGame", "FoldersOnTop", "GamelistFilters", "MAMENameStripExtraInfo", "ParseGamelistOnly", "ShowHiddenFiles", "ShowHiddenGames"))
+        addAll(bool("Gamelist and metadata", "AlternativeEmulatorPerGame", "FoldersOnTop", "GamelistFilters", "MAMENameStripExtraInfo", "ParseGamelistOnly", "ShowHiddenFiles", "ShowHiddenGames"))
         addAll(string("Gamelist and metadata", "DefaultSortOrder", "SystemsSorting"))
-        add(choice("Gamelist and metadata", "SaveGamelistsMode", "always", "on exit", "never"))
         addAll(bool("Navigation and UI", "DisplayClock", "ListScrollOverlay", "MenuBlurBackground", "NavigationSounds", "ShowHelpPrompts"))
         addAll(string("Navigation and UI", "ApplicationLanguage", "QuickSystemSelect", "StartupSystem"))
         add(choice("Navigation and UI", "MenuColorScheme", "dark", "light"))
@@ -75,7 +74,12 @@ object EsdeSharedSettingsCatalog {
         add(choice("Screensaver", "ScreensaverType", "video", "slideshow", "dim", "black"))
     }
 
-    val byName: Map<String, EsdeSettingSpec> = specs.associateBy { it.name }
+    private val locallyManagedCompatibilitySpecs = listOf(
+        EsdeSettingSpec("LegacyGamelistFileLocation", "bool", "SafeSync requirements"),
+        choice("SafeSync requirements", "SaveGamelistsMode", "always", "on exit", "never"),
+    )
+
+    val byName: Map<String, EsdeSettingSpec> = (specs + locallyManagedCompatibilitySpecs).associateBy { it.name }
 
     val categories: List<EsdeSettingCategory> = listOf(
         category(
@@ -86,7 +90,7 @@ object EsdeSharedSettingsCatalog {
         category(
             id = "gamelist_metadata",
             title = "Gamelist and metadata",
-            summary = "Synchronizes ROM gamelist location, emulator overrides, folder order, filters, hidden entries, MAME names, parsing, sorting, and gamelist save mode.",
+            summary = "Synchronizes emulator overrides, folder order, filters, hidden entries, MAME names, parsing, and sorting. ROM location and immediate saving are managed automatically by SafeSync.",
         ),
         category(
             id = "navigation_ui",

@@ -9,6 +9,18 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
         get() = preferences.getBoolean(PREF_ENABLED, false)
         set(value) { preferences.edit().putBoolean(PREF_ENABLED, value).apply() }
 
+    var firstSetupOffered: Boolean
+        get() = preferences.getBoolean(PREF_FIRST_SETUP_OFFERED, false)
+        set(value) { preferences.edit().putBoolean(PREF_FIRST_SETUP_OFFERED, value).apply() }
+
+    var firstSetupComplete: Boolean
+        get() = preferences.getBoolean(PREF_FIRST_SETUP_COMPLETE, false)
+        set(value) { preferences.edit().putBoolean(PREF_FIRST_SETUP_COMPLETE, value).apply() }
+
+    var firstSetupRole: String
+        get() = preferences.getString(PREF_FIRST_SETUP_ROLE, ROLE_RECEIVER) ?: ROLE_RECEIVER
+        set(value) { preferences.edit().putString(PREF_FIRST_SETUP_ROLE, value).apply() }
+
     var esdeDirectory: String
         get() = preferences.getString(PREF_ESDE_DIRECTORY, "") ?: ""
         set(value) { preferences.edit().putString(PREF_ESDE_DIRECTORY, value).apply() }
@@ -178,6 +190,9 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
 
     companion object {
         const val PREF_ENABLED = "esdeSync.enabled"
+        const val PREF_FIRST_SETUP_OFFERED = "esdeSync.firstSetup.offered"
+        const val PREF_FIRST_SETUP_COMPLETE = "esdeSync.firstSetup.complete"
+        const val PREF_FIRST_SETUP_ROLE = "esdeSync.firstSetup.role"
         const val PREF_ESDE_DIRECTORY = "esdeSync.directory"
         const val PREF_GAMELIST_DIRECTORY = "esdeSync.gamelistDirectory"
         const val PREF_APPLICATION_PACKAGE = "esdeSync.applicationPackage"
@@ -210,5 +225,8 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
         const val PREF_LAST_SHARED_SKIPPED = "esdeSync.shared.lastSkipped"
         const val PREF_LAST_SHARED_CONFLICTS = "esdeSync.shared.lastConflicts"
         const val PREF_LAST_SHARED_ERRORS = "esdeSync.shared.lastErrors"
+        const val PREF_LAST_SHARED_WARNINGS = "esdeSync.shared.lastWarnings"
+        const val ROLE_RECEIVER = "receiver"
+        const val ROLE_SOURCE = "source"
     }
 }

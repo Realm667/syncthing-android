@@ -23,6 +23,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -33,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.preference.PreferenceManager
@@ -57,6 +60,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     private var preSyncStarted = false
     private var postSyncStarted = false
     private var legacyConfigurationChecked = false
+    private var sharedWarning by mutableStateOf("")
     private var bootstrapDiscoveryAttempts = 0
     private var pollStartedAt = 0L
     private val freshFolderStatus = ConcurrentHashMap<String, FolderStatus>()
@@ -117,7 +121,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             handler.postDelayed({ if (!isFinishing) beginPreSyncRetry() }, POLL_MS)
             return
         }
-        if (settings.usesLegacyGamelistLocation() && !legacyConfigurationChecked) {
+        if (!legacyConfigurationChecked) {
             val coordinator = service?.esdeSyncCoordinator
             if (coordinator == null) {
                 state = EsdeSyncState.ERROR
@@ -125,7 +129,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 return
             }
             state = EsdeSyncState.STARTING
-            statusDetail = "Checking ES-DE ROM gamelist configuration…"
+            statusDetail = "Checking required ES-DE settings…"
             coordinator.ensureLegacyGamelistLocation { success, message ->
                 if (!success) {
                     state = EsdeSyncState.ERROR
@@ -167,6 +171,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                         state = EsdeSyncState.ERROR
                         statusDetail = shared.errorSummary()
                     } else {
+                        sharedWarning = (shared.collections.warnings + shared.settings.warnings).joinToString("; ")
                         statusDetail = "Applying synchronized per-game metadata…"
                         coordinator.importNow(finalizeBootstrap = !settings.bootstrapComplete) { metadata ->
                             if (metadata.invalid > 0) {
@@ -174,7 +179,8 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                                 statusDetail = "Per-game metadata contains ${metadata.invalid} invalid sidecar(s)."
                             } else {
                                 state = EsdeSyncState.READY_TO_PLAY
-                                statusDetail = "Everything is synchronized."
+                                statusDetail = if (sharedWarning.isBlank()) "Everything is synchronized."
+                                    else "Everything is synchronized. Warning: $sharedWarning"
                             }
                         }
                     }
@@ -213,6 +219,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             if (folder == null) return@map EsdeFolderHealth(
                 id, false, "unknown", "Folder is not configured", 0, 0, 0, 0, 0, 0.0, 0,
                 remoteState = "unknown",
+                label = id,
             )
             val statusPair = api.getFolderStatus(id)
             val status = freshFolderStatus[id] ?: statusPair.key
@@ -236,6 +243,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 conflicts = cache.discoveredConflictFiles?.size ?: 0,
                 remoteNeedItems = remote?.needItems?.toLong() ?: 0,
                 remoteState = remote?.remoteState ?: "unknown",
+                label = folderDisplayName(folder),
             )
         }
         val next = EsdeSyncStateEvaluator.evaluate(
@@ -417,13 +425,36 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     @Composable
     private fun SafeLaunchScreen() {
         Column(
-            modifier = Modifier.fillMaxSize().background(Color(0xFF160B0E)).verticalScroll(rememberScrollState())
+            modifier = Modifier.fillMaxSize().background(ESDE_BACKGROUND).verticalScroll(rememberScrollState())
                 .padding(horizontal = 28.dp, vertical = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text("SYNCTHING ES-DE SAFE SYNC", style = MaterialTheme.typography.headlineLarge, color = Color(0xFFF3EEE9), fontWeight = FontWeight.Bold)
-            Text(stateLabel(state), color = stateColor(state), style = MaterialTheme.typography.titleLarge)
-            Text(statusDetail, color = Color(0xFFCAC5C0), style = MaterialTheme.typography.bodyLarge)
+            Card(
+                colors = CardDefaults.cardColors(containerColor = ESDE_PANEL),
+                border = BorderStroke(1.dp, Color(0xFF444444)),
+            ) {
+                Column(Modifier.fillMaxWidth().padding(22.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "SYNCTHING ES-DE SAFE SYNC",
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center,
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = Color(0xFFF2F2F2),
+                        fontWeight = FontWeight.Bold,
+                    )
+                    HorizontalDivider(color = Color(0xFF3C3C3C))
+                    Text(stateLabel(state), color = stateColor(state), style = MaterialTheme.typography.titleLarge)
+                    Text(statusDetail, color = Color(0xFFCACACA), style = MaterialTheme.typography.bodyLarge)
+                    LinearProgressIndicator(
+                        progress = { sessionProgress() },
+                        modifier = Modifier.fillMaxWidth().height(10.dp),
+                        color = stateColor(state),
+                        trackColor = Color(0xFF454545),
+                    )
+                    Text(progressLabel(), color = Color(0xFF9C9C9C), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            InstructionCard()
             folderHealth.forEach { health -> FolderCard(health) }
             Spacer(Modifier.height(8.dp))
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -442,16 +473,49 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                         Button(onClick = ::finishSession) { Text("DONE") }
                         OutlinedButton(onClick = ::startAgain) { Text("START ES-DE AGAIN") }
                     }
-                    else -> {
+                    EsdeSyncState.ERROR -> {
                         OutlinedButton(onClick = ::retry) { Text("RETRY") }
                         OutlinedButton(onClick = { launchEsde(true) }) { Text("START WITHOUT SYNC") }
                     }
+                    EsdeSyncState.STARTING, EsdeSyncState.WAITING_FOR_PRIMARY, EsdeSyncState.RESCANNING,
+                    EsdeSyncState.SYNCING, EsdeSyncState.IMPORTING_METADATA -> {
+                        OutlinedButton(onClick = ::retry) { Text("RETRY") }
+                        OutlinedButton(onClick = { launchEsde(true) }) { Text("START WITHOUT SYNC") }
+                    }
+                    else -> Unit
                 }
             }
             if (state != EsdeSyncState.READY_TO_PLAY && state != EsdeSyncState.SAFE_TO_SWITCH) {
                 Text(
                     "Local changes will be kept. Fully synchronize this device before continuing on another handheld.",
                     color = Color(0xFFD8A657),
+                )
+            }
+            HorizontalDivider(color = Color(0xFF454545))
+            Text(
+                "A  SELECT     B  BACK     HOME  RETURN TO SAFE SYNC",
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+                color = Color(0xFFB8B8B8),
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+    }
+
+    @Composable
+    private fun InstructionCard() {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = ESDE_PANEL),
+            border = BorderStroke(2.dp, Color(0xFF9C001E)),
+        ) {
+            Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("WHAT TO DO", color = Color.White, fontWeight = FontWeight.Bold)
+                Text(currentInstruction(), color = Color(0xFFF0F0F0), style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "1  Start ES-DE here  ·  2  Play and close the emulator  ·  3  Return to ES-DE and press Home  ·  " +
+                        "4  Keep this screen open until SAFE TO SWITCH DEVICE",
+                    color = Color(0xFFAFAFAF),
+                    style = MaterialTheme.typography.bodyMedium,
                 )
             }
         }
@@ -463,13 +527,59 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         Card(
             modifier = Modifier.fillMaxWidth().focusable(),
             border = BorderStroke(1.dp, if (healthy) Color(0xFF74BF6C) else Color(0xFFD8A657)),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF2A1118)),
+            colors = CardDefaults.cardColors(containerColor = ESDE_PANEL),
         ) {
-            Row(Modifier.fillMaxWidth().padding(18.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(health.id, color = Color.White)
+            Row(Modifier.fillMaxWidth().padding(18.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(health.label, color = Color.White)
+                    if (health.label != health.id) Text("Folder ID: ${health.id}", color = Color(0xFF858585), style = MaterialTheme.typography.bodySmall)
+                }
                 Text(if (healthy) "✓ Up to date" else "${health.needTotalItems} items remaining", color = if (healthy) Color(0xFF74BF6C) else Color(0xFFD8A657))
             }
         }
+    }
+
+    private fun folderDisplayName(folder: Folder): String {
+        val name = folder.label.takeIf { it.isNotBlank() }
+            ?: folder.path?.let { java.io.File(it).name }?.takeIf { it.isNotBlank() }
+            ?: folder.id
+        return folder.group.takeIf { it.isNotBlank() }?.let { "$it / $name" } ?: name
+    }
+
+    private fun currentInstruction(): String = when (state) {
+        EsdeSyncState.READY_TO_PLAY -> "Synchronization is complete. Select START ES-DE to begin playing."
+        EsdeSyncState.ESDE_RUNNING, EsdeSyncState.OFFLINE_OVERRIDE ->
+            "After playing, close the emulator, return to ES-DE and press Home. Do not switch devices yet."
+        EsdeSyncState.EXPORTING_METADATA, EsdeSyncState.SYNCING_AFTER_PLAY ->
+            "Keep this screen open while SafeSync publishes and synchronizes your changes."
+        EsdeSyncState.SAFE_TO_SWITCH -> "All changes are synchronized. You may now switch devices or power this one off."
+        EsdeSyncState.ERROR -> "Resolve the message below or retry. Do not continue on another handheld."
+        EsdeSyncState.NOT_CONFIGURED -> "Complete First Setup before starting ES-DE with synchronized game data."
+        else -> "Wait while SafeSync checks the primary device and prepares the latest game data."
+    }
+
+    private fun progressLabel(): String = when (state) {
+        EsdeSyncState.READY_TO_PLAY -> "READY · START ES-DE"
+        EsdeSyncState.ESDE_RUNNING, EsdeSyncState.OFFLINE_OVERRIDE -> "PLAYING · RETURN WITH HOME WHEN FINISHED"
+        EsdeSyncState.SAFE_TO_SWITCH -> "COMPLETE · SAFE TO SWITCH DEVICE"
+        else -> "${(sessionProgress() * 100).toInt()}% · ${stateLabel(state)}"
+    }
+
+    private fun sessionProgress(): Float {
+        val folderCompletion = folderHealth.map { it.remoteCompletion.coerceIn(0, 100) }.average()
+            .takeUnless { it.isNaN() }?.div(100.0)?.toFloat() ?: 0f
+        return when (state) {
+            EsdeSyncState.NOT_CONFIGURED, EsdeSyncState.ERROR -> 0f
+            EsdeSyncState.STARTING, EsdeSyncState.WAITING_FOR_PRIMARY -> 0.08f
+            EsdeSyncState.RESCANNING -> 0.14f
+            EsdeSyncState.SYNCING -> 0.14f + folderCompletion * 0.26f
+            EsdeSyncState.IMPORTING_METADATA -> 0.45f
+            EsdeSyncState.READY_TO_PLAY -> 0.5f
+            EsdeSyncState.OFFLINE_OVERRIDE, EsdeSyncState.ESDE_RUNNING -> 0.55f
+            EsdeSyncState.EXPORTING_METADATA -> 0.68f
+            EsdeSyncState.SYNCING_AFTER_PLAY -> 0.72f + folderCompletion * 0.27f
+            EsdeSyncState.SAFE_TO_SWITCH -> 1f
+        }.coerceIn(0f, 1f)
     }
 
     private fun stateLabel(value: EsdeSyncState): String = when (value) {
@@ -489,11 +599,14 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     }
 
     companion object {
-        private const val POLL_MS = 1_500L
-        private const val INITIAL_SCAN_DELAY_MS = 1_500L
-        private const val RETURN_FLUSH_MS = 1_000L
-        private const val SETTINGS_RETURN_DELAY_MS = 250L
-        private const val SYNC_TIMEOUT_MS = 90_000L
-        private const val BOOTSTRAP_DISCOVERY_ATTEMPTS = 2
+        private val ESDE_BACKGROUND = Color(0xFF2B2B2B)
+        private val ESDE_PANEL = Color(0xFF151515)
+        private const val RETURN_FLUSH_MS = 1000L
+        private const val SETTINGS_RETURN_DELAY_MS = 700L
+        private const val INITIAL_SCAN_DELAY_MS = 1000L
+        private const val POLL_MS = 1500L
+        private const val SYNC_TIMEOUT_MS = 120_000L
+        private const val BOOTSTRAP_DISCOVERY_ATTEMPTS = 4
     }
+
 }

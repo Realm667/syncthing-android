@@ -20,7 +20,7 @@ object EsdeLegacyGamelistConfigurator {
         val appContext = context.applicationContext
         executor.execute {
             val result = runCatching {
-                ensureLegacyGamelistLocationBlocking(
+                ensureRequiredEsdeSettingsBlocking(
                     appFilesDirectory = appContext.filesDir,
                     esdeDirectory = settings.esdeDirectory,
                     legacyLocationRequired = settings.usesLegacyGamelistLocation(),
@@ -34,12 +34,11 @@ object EsdeLegacyGamelistConfigurator {
 
 }
 
-internal fun ensureLegacyGamelistLocationBlocking(
+internal fun ensureRequiredEsdeSettingsBlocking(
     appFilesDirectory: File,
     esdeDirectory: String,
     legacyLocationRequired: Boolean,
 ): String {
-    if (!legacyLocationRequired) return "Central ES-DE gamelist location is selected; no change is required"
     require(esdeDirectory.isNotBlank()) { "Select the ES-DE application data directory first" }
     val root = File(esdeDirectory).canonicalFile
     val settingsFile = File(root, "settings/es_settings.xml").canonicalFile
@@ -50,7 +49,10 @@ internal fun ensureLegacyGamelistLocationBlocking(
     if (!backup.isFile) {
         AtomicFileWriter.write(backup) { output -> settingsFile.inputStream().use { it.copyTo(output) } }
     }
-    val changed = EsdeSettingsEditor().enableLegacyGamelistLocation(settingsFile)
-    return if (changed) "Enabled LegacyGamelistFileLocation in es_settings.xml"
-    else "LegacyGamelistFileLocation is already enabled"
+    val changed = EsdeSettingsEditor().ensureSafeSyncRequirements(settingsFile, legacyLocationRequired)
+    return when {
+        changed == 0 -> "Required ES-DE settings are active"
+        legacyLocationRequired -> "Enabled ROM gamelists and immediate gamelist saving"
+        else -> "Enabled immediate gamelist saving"
+    }
 }

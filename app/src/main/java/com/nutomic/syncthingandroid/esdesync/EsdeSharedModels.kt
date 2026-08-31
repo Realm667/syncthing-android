@@ -8,12 +8,14 @@ data class EsdeSharedOperationResult(
     val skipped: Int = 0,
     val conflicts: List<String> = emptyList(),
     val errors: List<String> = emptyList(),
+    val warnings: List<String> = emptyList(),
 ) {
     val successful: Boolean get() = conflicts.isEmpty() && errors.isEmpty()
     fun summary(subject: String): String = buildString {
         append("$subject: $applied applied, $skipped skipped")
         if (conflicts.isNotEmpty()) append(", ${conflicts.size} conflict(s): ${conflicts.joinToString()}")
         if (errors.isNotEmpty()) append(", ${errors.size} error(s): ${errors.joinToString()}")
+        if (warnings.isNotEmpty()) append(", ${warnings.size} warning(s): ${warnings.joinToString()}")
     }
 }
 

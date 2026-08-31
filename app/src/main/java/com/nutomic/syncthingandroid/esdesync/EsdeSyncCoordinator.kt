@@ -88,16 +88,23 @@ class EsdeSyncCoordinator(
                 settings.bootstrapPendingImport = true
                 return@execute
             }
+            if (settings.esdeWasLaunched) return@execute // Safe Launch imports after the current play session.
             val file = File(fullPath)
             val system = generateSequence(file.parentFile) { it.parentFile }
                 .firstOrNull { it.name == EsdeSidecarStore.SIDECAR_DIRECTORY }?.parentFile
-            if (system != null && isInsideGamelists(system)) importSystemInternal(system)
+            if (system != null && isInsideGamelists(system)) runCatching {
+                requireEsdeStopped()
+                importSystemInternal(system)
+            }.onFailure { recordError("Deferred remote metadata import", it) }
         }
     }
 
     fun importNow(finalizeBootstrap: Boolean = false, callback: (EsdeImportResult) -> Unit = {}) {
         executor.execute {
-            val result = runCatching { importAllInternal() }
+            val result = runCatching {
+                requireEsdeStopped()
+                importAllInternal()
+            }
                 .onFailure { recordError("Import failed", it) }
                 .getOrDefault(EsdeImportResult(invalid = 1))
             if (finalizeBootstrap && result.invalid == 0) {
@@ -365,6 +372,9 @@ class EsdeSyncCoordinator(
 
     private fun requireEsdeStopped() {
         check(!settings.esdeWasLaunched) { "ES-DE is running; shared state can only be applied before Safe Launch" }
+        check(EsdeProcessController.stopBackgroundProcess(appContext, settings.applicationPackage)) {
+            "ES-DE could not be closed automatically. Close ES-DE and retry."
+        }
         require(esdeSettingsFile().isFile) { "Missing ES-DE settings/es_settings.xml" }
     }
 
@@ -391,6 +401,7 @@ class EsdeSyncCoordinator(
             .putInt(EsdeSyncSettings.PREF_LAST_SHARED_SKIPPED, result.skipped)
             .putString(EsdeSyncSettings.PREF_LAST_SHARED_CONFLICTS, result.conflicts.joinToString())
             .putString(EsdeSyncSettings.PREF_LAST_SHARED_ERRORS, result.errors.joinToString())
+            .putString(EsdeSyncSettings.PREF_LAST_SHARED_WARNINGS, result.warnings.joinToString())
             .apply()
     }
 

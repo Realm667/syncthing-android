@@ -67,15 +67,28 @@ class EsdeSharedSettingsManagerTest {
         assertFalse(profile.contains("/not-shared"))
     }
 
-    @Test fun rejectsWrongTypeAndUnavailableTheme() {
+    @Test fun rejectsWrongTypeButUnavailableThemeIsNonBlocking() {
         val fixture = fixture("<string name=\"Theme\" value=\"local-theme\" />")
         fixture.profile.writeText("""{"schemaVersion":1,"settings":{"DisplayClock":{"type":"bool","value":"true"}}}""")
         assertFalse(fixture.manager.importSelected(setOf("DisplayClock")).successful)
 
         fixture.profile.writeText("""{"schemaVersion":1,"settings":{"Theme":{"type":"string","value":"not-installed"}}}""")
         val result = fixture.manager.importSelected(setOf("Theme"))
-        assertFalse(result.successful)
+        assertTrue(result.successful)
+        assertEquals(1, result.warnings.size)
         assertEquals("local-theme", EsdeSettingsEditor().read(fixture.settings, setOf("Theme"))["Theme"]?.value)
+    }
+
+    @Test fun activeThemeAndVariantAreAcceptedWithoutFilesystemFalsePositive() {
+        val fixture = fixture("""
+            <string name="Theme" value="Art Book Next" />
+            <string name="ThemeVariant" value="List: Metadata &amp; Boxart" />
+        """.trimIndent())
+        fixture.profile.writeText("""{"schemaVersion":1,"settings":{"Theme":{"type":"string","value":"Art Book Next"},"ThemeVariant":{"type":"string","value":"List: Metadata & Boxart"}}}""")
+        val result = fixture.manager.importSelected(setOf("Theme", "ThemeVariant"))
+        assertTrue(result.successful)
+        assertTrue(result.warnings.isEmpty())
+        assertEquals(2, result.skipped)
     }
 
     @Test fun firstTimeImportAdoptsExistingSharedProfileInsteadOfDeviceDefaults() {

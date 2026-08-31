@@ -30,6 +30,7 @@ data class EsdeFolderHealth(
     val conflicts: Int,
     val remoteNeedItems: Long = 0,
     val remoteState: String = "valid",
+    val label: String = id,
 )
 
 data class EsdeGateInput(

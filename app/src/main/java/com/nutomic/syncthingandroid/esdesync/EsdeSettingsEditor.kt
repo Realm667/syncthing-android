@@ -88,6 +88,16 @@ class EsdeSettingsEditor {
         return true
     }
 
+    fun ensureSafeSyncRequirements(file: File, legacyLocationRequired: Boolean): Int {
+        val values = linkedMapOf(
+            SAVE_GAMELISTS_SETTING to XmlSetting("string", SAVE_GAMELISTS_ALWAYS),
+        )
+        if (legacyLocationRequired) {
+            values[LEGACY_SETTING] = XmlSetting("bool", "true")
+        }
+        return apply(file, values)
+    }
+
     private fun parse(file: File): ParsedSettings {
         require(file.isFile) { "Missing ES-DE settings file: ${file.path}" }
         require(file.length() <= MAX_SETTINGS_BYTES) { "ES-DE settings file is too large" }
@@ -184,6 +194,8 @@ class EsdeSettingsEditor {
 
     companion object {
         const val LEGACY_SETTING = "LegacyGamelistFileLocation"
+        const val SAVE_GAMELISTS_SETTING = "SaveGamelistsMode"
+        const val SAVE_GAMELISTS_ALWAYS = "always"
         const val MAX_SETTINGS_BYTES = 2L * 1024L * 1024L
         private const val WRAPPER_TAG = "esde-settings-fragment"
         private val SETTING_TYPES = setOf("bool", "int", "float", "string")
