@@ -1,5 +1,6 @@
 ES-DE SafeSync
-- Adds guided conflict inspection and safe resolution with private backups.
-- Ignores stale remote gamelist.xml and directory-only entries in the Safe Launch gate.
-- Clarifies the First Setup theme note and Safe Launch instructions.
-- Uses green success actions and a red unsafe-launch action consistently.
+- Fixes disabled Primary Device and Gaming Folder choices in First Setup.
+- Returns from Android's Home-app picker to the exact First Setup step.
+- Separates DONE (idle) from START NEW SESSION and confirms ES-DE has closed.
+- Prevents Shared Collections and Shared Settings from competing for collection ownership.
+- Repairs Master / Roms protection for gamelist.xml and synchronized global state.

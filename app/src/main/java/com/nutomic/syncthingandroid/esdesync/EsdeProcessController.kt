@@ -7,12 +7,32 @@ internal object EsdeProcessController {
     fun stopBackgroundProcess(context: Context, packageName: String): Boolean {
         if (packageName.isBlank() || packageName == context.packageName) return false
         val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        manager.killBackgroundProcesses(packageName)
-        Thread.sleep(PROCESS_SETTLE_MS)
-        return manager.runningAppProcesses.orEmpty().none { process ->
-            process.processName == packageName || process.pkgList?.contains(packageName) == true
-        }
+        return EsdeProcessStopPolicy.stop(
+            requestStop = { manager.killBackgroundProcesses(packageName) },
+            isRunning = {
+                manager.runningAppProcesses.orEmpty().any { process ->
+                    process.processName == packageName || process.pkgList?.contains(packageName) == true
+                }
+            },
+            wait = Thread::sleep,
+        )
     }
+}
 
-    private const val PROCESS_SETTLE_MS = 350L
+internal object EsdeProcessStopPolicy {
+    fun stop(
+        attempts: Int = 20,
+        intervalMs: Long = 250L,
+        requestStop: () -> Unit,
+        isRunning: () -> Boolean,
+        wait: (Long) -> Unit,
+    ): Boolean {
+        require(attempts > 0)
+        repeat(attempts) { attempt ->
+            requestStop()
+            if (!isRunning()) return true
+            if (attempt < attempts - 1) wait(intervalMs)
+        }
+        return false
+    }
 }

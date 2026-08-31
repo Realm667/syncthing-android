@@ -85,6 +85,15 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (settings.firstSetupOffered && !settings.firstSetupComplete) {
+            startActivity(
+                Intent(this, SettingsActivity::class.java)
+                    .putExtra(SettingsActivity.EXTRA_START_DESTINATION, "GamingFirstSetup")
+                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            )
+            finish()
+            return
+        }
         if (settings.activeSessionId.isBlank()) {
             val previous = preferences.getInt(
                 Constants.PREF_BTNSTATE_FORCE_START_STOP,
@@ -422,12 +431,21 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     private fun finishSession() {
         restoreForceState()
         settings.clearSession()
-        finish()
+        handler.removeCallbacksAndMessages(null)
+        preSyncStarted = false
+        postSyncStarted = false
+        legacyConfigurationChecked = false
+        bootstrapDiscoveryAttempts = 0
+        folderHealth = emptyList()
+        state = EsdeSafeLaunchCompletionPolicy.afterDone(state)
+        statusDetail = "Session complete. ES-DE is closed and this device is idle. Safe to switch device."
     }
 
     private fun startAgain() {
-        restoreForceState()
-        settings.clearSession()
+        if (settings.activeSessionId.isNotBlank()) {
+            restoreForceState()
+            settings.clearSession()
+        }
         startActivity(Intent(this, EsdeSafeLaunchActivity::class.java))
         finish()
     }
@@ -615,6 +633,10 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                         ) { Text("DONE") }
                         OutlinedButton(onClick = ::startAgain) { Text("START NEW SESSION") }
                     }
+                    EsdeSyncState.IDLE -> Button(
+                        onClick = ::startAgain,
+                        colors = ButtonDefaults.buttonColors(containerColor = SAFE_GREEN, contentColor = Color(0xFF10210E)),
+                    ) { Text("START NEW SESSION") }
                     EsdeSyncState.ERROR -> {
                         OutlinedButton(onClick = ::retry) { Text("RETRY") }
                         OutlinedButton(onClick = ::openSyncthing) { Text("OPEN SYNCTHING") }
@@ -634,7 +656,9 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                     else -> Unit
                 }
             }
-            if (state != EsdeSyncState.READY_TO_PLAY && state != EsdeSyncState.SAFE_TO_SWITCH) {
+            if (state != EsdeSyncState.READY_TO_PLAY && state != EsdeSyncState.SAFE_TO_SWITCH &&
+                state != EsdeSyncState.IDLE
+            ) {
                 Text(
                     "Local changes will be kept. Fully synchronize this device before continuing on another handheld.",
                     color = Color(0xFFD8A657),
@@ -886,6 +910,8 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             "Keep this screen open while SafeSync publishes and synchronizes your changes."
         EsdeSyncState.SAFE_TO_SWITCH ->
             "ES-DE is closed and all changes are synchronized. Start a new session, close SafeSync, or switch devices."
+        EsdeSyncState.IDLE ->
+            "SafeSync is idle. ES-DE remains closed until you deliberately start a new synchronized session."
         EsdeSyncState.ERROR -> "Resolve the message below or retry. Do not continue on another handheld."
         EsdeSyncState.NOT_CONFIGURED -> "Complete First Setup before starting ES-DE with synchronized game data."
         else -> "Wait while SafeSync checks the primary device and prepares the latest game data."
@@ -895,6 +921,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         EsdeSyncState.READY_TO_PLAY -> "READY · START ES-DE"
         EsdeSyncState.ESDE_RUNNING, EsdeSyncState.OFFLINE_OVERRIDE -> "PLAYING · RETURN WITH HOME WHEN FINISHED"
         EsdeSyncState.SAFE_TO_SWITCH -> "COMPLETE · SAFE TO SWITCH DEVICE"
+        EsdeSyncState.IDLE -> "IDLE · SAFE TO SWITCH DEVICE"
         else -> "${(sessionProgress() * 100).toInt()}% · ${stateLabel(state)}"
     }
 
@@ -912,12 +939,14 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             EsdeSyncState.EXPORTING_METADATA -> 0.68f
             EsdeSyncState.SYNCING_AFTER_PLAY -> 0.72f + folderCompletion * 0.27f
             EsdeSyncState.SAFE_TO_SWITCH -> 1f
+            EsdeSyncState.IDLE -> 1f
         }.coerceIn(0f, 1f)
     }
 
     private fun stateLabel(value: EsdeSyncState): String = when (value) {
         EsdeSyncState.READY_TO_PLAY -> "SAFE TO PLAY"
         EsdeSyncState.SAFE_TO_SWITCH -> "SAFE TO SWITCH DEVICE"
+        EsdeSyncState.IDLE -> "IDLE"
         EsdeSyncState.WAITING_FOR_PRIMARY -> "PRIMARY DEVICE UNAVAILABLE"
         EsdeSyncState.ERROR -> "ACTION REQUIRED"
         EsdeSyncState.NOT_CONFIGURED -> "SETUP REQUIRED"
@@ -926,7 +955,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     }
 
     private fun stateColor(value: EsdeSyncState): Color = when (value) {
-        EsdeSyncState.READY_TO_PLAY, EsdeSyncState.SAFE_TO_SWITCH -> Color(0xFF74BF6C)
+        EsdeSyncState.READY_TO_PLAY, EsdeSyncState.SAFE_TO_SWITCH, EsdeSyncState.IDLE -> Color(0xFF74BF6C)
         EsdeSyncState.ERROR -> Color(0xFFD96B68)
         else -> Color(0xFFD8A657)
     }

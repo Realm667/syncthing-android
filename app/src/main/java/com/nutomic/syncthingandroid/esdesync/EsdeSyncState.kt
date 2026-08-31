@@ -15,7 +15,13 @@ enum class EsdeSyncState {
     EXPORTING_METADATA,
     SYNCING_AFTER_PLAY,
     SAFE_TO_SWITCH,
+    IDLE,
     ERROR,
+}
+
+object EsdeSafeLaunchCompletionPolicy {
+    fun afterDone(current: EsdeSyncState): EsdeSyncState =
+        if (current == EsdeSyncState.SAFE_TO_SWITCH) EsdeSyncState.IDLE else current
 }
 
 data class EsdeFolderHealth(
@@ -124,6 +130,19 @@ object EsdeSetupEvaluator {
     }
 }
 
+object EsdeFirstSetupPolicy {
+    fun canChooseSyncTargets(apiReady: Boolean): Boolean = apiReady
+
+    fun canFinish(
+        coreComplete: Boolean,
+        apiReady: Boolean,
+        coordinatorReady: Boolean,
+        role: String,
+        sourceInitialized: Boolean,
+    ): Boolean = coreComplete && apiReady && coordinatorReady &&
+        (role != EsdeSyncSettings.ROLE_SOURCE || sourceInitialized)
+}
+
 enum class EsdeIgnoreRuleState { ACTIVE, MISSING, CONFLICTING_INCLUDE }
 
 object EsdeIgnoreRules {
@@ -132,21 +151,23 @@ object EsdeIgnoreRules {
         if (normalized.any { (included, pattern) -> included && pattern in GAMELIST_PATTERNS }) {
             return EsdeIgnoreRuleState.CONFLICTING_INCLUDE
         }
-        var includeSeen = false
-        normalized.forEach { (included, pattern) ->
-            if (included) includeSeen = true
-            if (!included && pattern in GAMELIST_PATTERNS) {
-                return if (includeSeen) EsdeIgnoreRuleState.MISSING else EsdeIgnoreRuleState.ACTIVE
-            }
+        if (normalized.none { (included, pattern) -> !included && pattern in GAMELIST_PATTERNS }) {
+            return EsdeIgnoreRuleState.MISSING
         }
-        return EsdeIgnoreRuleState.MISSING
+        val terminalIgnore = normalized.indexOfFirst { (included, pattern) -> !included && pattern == "*" }
+            .takeIf { it >= 0 } ?: Int.MAX_VALUE
+        val globalIncludesProtected = GLOBAL_INCLUDE_PATTERNS.all { required ->
+            val index = normalized.indexOfFirst { (included, pattern) -> included && pattern == required }
+            index >= 0 && index < terminalIgnore
+        }
+        return if (globalIncludesProtected) EsdeIgnoreRuleState.ACTIVE else EsdeIgnoreRuleState.MISSING
     }
 
     fun placeIgnoreRuleFirst(lines: Collection<String>): List<String> = buildList {
-        add("gamelist.xml")
+        addAll(REQUIRED_RULES)
         addAll(lines.filterNot { raw ->
             val (included, pattern) = normalize(raw)
-            !included && pattern in GAMELIST_PATTERNS
+            (!included && pattern in GAMELIST_PATTERNS) || (included && pattern in GLOBAL_INCLUDE_PATTERNS)
         })
     }
 
@@ -159,4 +180,13 @@ object EsdeIgnoreRules {
     }
 
     private val GAMELIST_PATTERNS = setOf("gamelist.xml", "**/gamelist.xml")
+    private val GLOBAL_INCLUDE_PATTERNS = listOf(
+        "/.esde-sync-global",
+        "/.esde-sync-global/**",
+        "/.esde-sync-global/collections",
+        "/.esde-sync-global/collections/*.xcc",
+        "/.esde-sync-global/settings",
+        "/.esde-sync-global/settings/shared-settings.json",
+    )
+    internal val REQUIRED_RULES = listOf("gamelist.xml") + GLOBAL_INCLUDE_PATTERNS.map { "!$it" }
 }

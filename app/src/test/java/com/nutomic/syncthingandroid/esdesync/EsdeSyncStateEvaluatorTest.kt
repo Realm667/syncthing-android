@@ -77,9 +77,79 @@ class EsdeSyncStateEvaluatorTest {
         )
     }
 
+    @Test fun firstSetupUnlocksLiveTargetsAndTreatsReceiverAndSourceSafely() {
+        assertFalse(EsdeFirstSetupPolicy.canChooseSyncTargets(false))
+        assertTrue(EsdeFirstSetupPolicy.canChooseSyncTargets(true))
+        assertTrue(
+            EsdeFirstSetupPolicy.canFinish(
+                coreComplete = true,
+                apiReady = true,
+                coordinatorReady = true,
+                role = EsdeSyncSettings.ROLE_RECEIVER,
+                sourceInitialized = false,
+            ),
+        )
+        assertFalse(
+            EsdeFirstSetupPolicy.canFinish(
+                coreComplete = true,
+                apiReady = true,
+                coordinatorReady = true,
+                role = EsdeSyncSettings.ROLE_SOURCE,
+                sourceInitialized = false,
+            ),
+        )
+        assertTrue(
+            EsdeFirstSetupPolicy.canFinish(
+                coreComplete = true,
+                apiReady = true,
+                coordinatorReady = true,
+                role = EsdeSyncSettings.ROLE_SOURCE,
+                sourceInitialized = true,
+            ),
+        )
+    }
+
+    @Test fun doneEndsInIdleWithoutStartingAnotherSynchronization() {
+        assertEquals(
+            EsdeSyncState.IDLE,
+            EsdeSafeLaunchCompletionPolicy.afterDone(EsdeSyncState.SAFE_TO_SWITCH),
+        )
+        assertEquals(
+            EsdeSyncState.ERROR,
+            EsdeSafeLaunchCompletionPolicy.afterDone(EsdeSyncState.ERROR),
+        )
+    }
+
+    @Test fun processStopWaitsForConfirmedExitAndIsBounded() {
+        var runningChecks = 0
+        var stopRequests = 0
+        var waits = 0
+        assertTrue(
+            EsdeProcessStopPolicy.stop(
+                attempts = 5,
+                intervalMs = 1,
+                requestStop = { stopRequests++ },
+                isRunning = { ++runningChecks < 3 },
+                wait = { waits++ },
+            ),
+        )
+        assertEquals(3, stopRequests)
+        assertEquals(2, waits)
+
+        assertFalse(
+            EsdeProcessStopPolicy.stop(
+                attempts = 2,
+                intervalMs = 1,
+                requestStop = { },
+                isRunning = { true },
+                wait = { },
+            ),
+        )
+    }
+
     @Test fun ignoreRuleHonorsSyncthingFirstMatchSemantics() {
         assertEquals(EsdeIgnoreRuleState.MISSING, EsdeIgnoreRules.evaluate(listOf("*.tmp")))
-        assertEquals(EsdeIgnoreRuleState.ACTIVE, EsdeIgnoreRules.evaluate(listOf("(?i)gamelist.xml")))
+        assertEquals(EsdeIgnoreRuleState.MISSING, EsdeIgnoreRules.evaluate(listOf("(?i)gamelist.xml")))
         assertEquals(
             EsdeIgnoreRuleState.CONFLICTING_INCLUDE,
             EsdeIgnoreRules.evaluate(listOf("!**/gamelist.xml", "gamelist.xml")),
@@ -88,8 +158,11 @@ class EsdeSyncStateEvaluatorTest {
         assertEquals(EsdeIgnoreRuleState.MISSING, EsdeIgnoreRules.evaluate(includes))
         val corrected = EsdeIgnoreRules.placeIgnoreRuleFirst(includes)
         assertEquals("gamelist.xml", corrected.first())
+        assertEquals(EsdeIgnoreRules.REQUIRED_RULES, corrected.take(EsdeIgnoreRules.REQUIRED_RULES.size))
         assertEquals(EsdeIgnoreRuleState.ACTIVE, EsdeIgnoreRules.evaluate(corrected))
         assertEquals(1, corrected.count { it == "gamelist.xml" })
+        assertEquals(corrected, EsdeIgnoreRules.placeIgnoreRuleFirst(corrected))
+        assertTrue(corrected.indexOf("!/.esde-sync-global/settings/shared-settings.json") < corrected.indexOf("*"))
     }
 
     @Test fun gamelistIgnoreProtectionTargetsOnlySelectedMasterRomsFolder() {

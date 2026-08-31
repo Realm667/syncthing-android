@@ -47,7 +47,7 @@ object EsdeSharedSettingsCatalog {
         EsdeSettingSpec(name, "string", category, allowed = values.toSet())
 
     val specs: List<EsdeSettingSpec> = buildList {
-        addAll(string("Collections", "CollectionCustomGrouping", "CollectionSystemsAuto", "CollectionSystemsCustom"))
+        addAll(string("Collections", "CollectionCustomGrouping", "CollectionSystemsAuto"))
         addAll(bool("Collections", "FavoritesAddButton", "FavoritesFirst", "FavoritesStar", "FavFirstCustom", "FavStarCustom"))
         addAll(bool("Gamelist and metadata", "AlternativeEmulatorPerGame", "FoldersOnTop", "GamelistFilters", "MAMENameStripExtraInfo", "ParseGamelistOnly", "ShowHiddenFiles", "ShowHiddenGames"))
         addAll(string("Gamelist and metadata", "DefaultSortOrder", "SystemsSorting"))
@@ -75,11 +75,13 @@ object EsdeSharedSettingsCatalog {
     }
 
     private val locallyManagedCompatibilitySpecs = listOf(
+        EsdeSettingSpec("CollectionSystemsCustom", "string", "Shared Collections"),
         EsdeSettingSpec("LegacyGamelistFileLocation", "bool", "SafeSync requirements"),
         choice("SafeSync requirements", "SaveGamelistsMode", "always", "on exit", "never"),
     )
 
     val byName: Map<String, EsdeSettingSpec> = (specs + locallyManagedCompatibilitySpecs).associateBy { it.name }
+    private val locallyManagedNames = locallyManagedCompatibilitySpecs.mapTo(hashSetOf()) { it.name }
 
     val categories: List<EsdeSettingCategory> = listOf(
         category(
@@ -133,6 +135,11 @@ object EsdeSharedSettingsCatalog {
     fun categoriesForSettingNames(settingNames: Set<String>): Set<String> = categories
         .filter { category -> category.specs.any { it.name in settingNames } }
         .mapTo(linkedSetOf()) { it.id }
+
+    fun shareableSelection(settingNames: Set<String>): Set<String> =
+        settingNames.filterTo(linkedSetOf()) { name -> name !in locallyManagedNames }
+
+    fun isShareable(name: String): Boolean = specs.any { it.name == name }
 
     // Defense in depth: these can never become shared even if a future caller bypasses the UI.
     fun requireAllowed(name: String): EsdeSettingSpec = byName[name]

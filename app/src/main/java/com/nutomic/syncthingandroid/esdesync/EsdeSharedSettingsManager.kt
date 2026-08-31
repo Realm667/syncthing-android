@@ -27,6 +27,9 @@ internal class EsdeSharedSettingsManager(
 
     fun publish(selected: Set<String>, allowInitialize: Boolean = false): EsdeSharedOperationResult {
         if (selected.isEmpty()) return EsdeSharedOperationResult()
+        val shareable = EsdeSharedSettingsCatalog.shareableSelection(selected)
+        val reservedSkipped = selected.size - shareable.size
+        if (shareable.isEmpty()) return EsdeSharedOperationResult(selected.size, skipped = reservedSkipped)
         sharedConflictFiles().takeIf { it.isNotEmpty() }?.let {
             return EsdeSharedOperationResult(conflicts = it)
         }
@@ -37,16 +40,16 @@ internal class EsdeSharedSettingsManager(
         }
         val errors = mutableListOf<String>()
         val conflicts = mutableListOf<String>()
-        val local = editor.read(settingsFile, selected)
+        val local = editor.read(settingsFile, shareable)
         val existing = if (sharedFile.isFile) runCatching { readProfile() }
             .getOrElse { return EsdeSharedOperationResult(errors = listOf(it.message ?: "Invalid shared settings profile")) }
             else EsdeSharedSettingsProfile()
-        val output = existing.settings.toMutableMap()
+        val output = existing.settings.filterKeys(EsdeSharedSettingsCatalog::isShareable).toMutableMap()
         var applied = 0
         var skipped = 0
         val completed = mutableMapOf<String, Pair<String, String>>()
 
-        selected.sorted().forEach { name ->
+        shareable.sorted().forEach { name ->
             try {
                 val spec = EsdeSharedSettingsCatalog.requireAllowed(name)
                 val xml = local[name] ?: throw IllegalArgumentException("local value is missing")
@@ -82,26 +85,29 @@ internal class EsdeSharedSettingsManager(
         }
         if (applied > 0) writeProfile(EsdeSharedSettingsProfile(settings = output.toSortedMap()))
         completed.forEach { (name, hashes) -> snapshots.save("settings", name, EsdeSharedSnapshot(hashes.first, hashes.second)) }
-        return EsdeSharedOperationResult(selected.size, applied, skipped, conflicts, errors)
+        return EsdeSharedOperationResult(selected.size, applied, skipped + reservedSkipped, conflicts, errors)
     }
 
     fun importSelected(selected: Set<String>): EsdeSharedOperationResult {
         if (selected.isEmpty()) return EsdeSharedOperationResult()
+        val shareable = EsdeSharedSettingsCatalog.shareableSelection(selected)
+        val reservedSkipped = selected.size - shareable.size
+        if (shareable.isEmpty()) return EsdeSharedOperationResult(selected.size, skipped = reservedSkipped)
         sharedConflictFiles().takeIf { it.isNotEmpty() }?.let {
             return EsdeSharedOperationResult(conflicts = it)
         }
         if (!sharedFile.isFile) return EsdeSharedOperationResult(skipped = selected.size)
         val profile = runCatching { readProfile() }
             .getOrElse { return EsdeSharedOperationResult(errors = listOf(it.message ?: "Invalid shared settings profile")) }
-        val local = editor.read(settingsFile, selected + "Theme")
+        val local = editor.read(settingsFile, shareable + "Theme")
         val changes = linkedMapOf<String, EsdeSettingsEditor.XmlSetting>()
         val completed = mutableMapOf<String, EsdeSharedSnapshot>()
         val conflicts = mutableListOf<String>()
         val errors = mutableListOf<String>()
         val warnings = mutableListOf<String>()
-        var skipped = 0
+        var skipped = reservedSkipped
 
-        selected.sorted().forEach { name ->
+        shareable.sorted().forEach { name ->
             val shared = profile.settings[name]
             if (shared == null) {
                 skipped++ // Missing shared fields intentionally preserve local XML.

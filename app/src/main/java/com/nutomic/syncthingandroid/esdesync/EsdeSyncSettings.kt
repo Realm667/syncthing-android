@@ -1,6 +1,7 @@
 package com.nutomic.syncthingandroid.esdesync
 
 import android.content.SharedPreferences
+import com.nutomic.syncthingandroid.service.Constants
 import java.io.File
 import java.util.UUID
 
@@ -20,6 +21,38 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
     var firstSetupRole: String
         get() = preferences.getString(PREF_FIRST_SETUP_ROLE, ROLE_RECEIVER) ?: ROLE_RECEIVER
         set(value) { preferences.edit().putString(PREF_FIRST_SETUP_ROLE, value).apply() }
+
+    var firstSetupStep: Int
+        get() = preferences.getInt(PREF_FIRST_SETUP_STEP, 0)
+        set(value) { preferences.edit().putInt(PREF_FIRST_SETUP_STEP, value).apply() }
+
+    fun acquireFirstSetupServiceLease() {
+        val editor = preferences.edit()
+        if (!preferences.contains(PREF_FIRST_SETUP_PREVIOUS_FORCE_STATE)) {
+            editor.putInt(
+                PREF_FIRST_SETUP_PREVIOUS_FORCE_STATE,
+                preferences.getInt(
+                    Constants.PREF_BTNSTATE_FORCE_START_STOP,
+                    Constants.BTNSTATE_NO_FORCE_START_STOP,
+                ),
+            )
+        }
+        editor.putInt(Constants.PREF_BTNSTATE_FORCE_START_STOP, Constants.BTNSTATE_FORCE_START).apply()
+    }
+
+    fun releaseFirstSetupServiceLease() {
+        if (!preferences.contains(PREF_FIRST_SETUP_PREVIOUS_FORCE_STATE)) return
+        preferences.edit()
+            .putInt(
+                Constants.PREF_BTNSTATE_FORCE_START_STOP,
+                preferences.getInt(
+                    PREF_FIRST_SETUP_PREVIOUS_FORCE_STATE,
+                    Constants.BTNSTATE_NO_FORCE_START_STOP,
+                ),
+            )
+            .remove(PREF_FIRST_SETUP_PREVIOUS_FORCE_STATE)
+            .apply()
+    }
 
     var esdeDirectory: String
         get() = preferences.getString(PREF_ESDE_DIRECTORY, "") ?: ""
@@ -193,6 +226,8 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
         const val PREF_FIRST_SETUP_OFFERED = "esdeSync.firstSetup.offered"
         const val PREF_FIRST_SETUP_COMPLETE = "esdeSync.firstSetup.complete"
         const val PREF_FIRST_SETUP_ROLE = "esdeSync.firstSetup.role"
+        const val PREF_FIRST_SETUP_STEP = "esdeSync.firstSetup.step"
+        private const val PREF_FIRST_SETUP_PREVIOUS_FORCE_STATE = "esdeSync.firstSetup.previousForceState"
         const val PREF_ESDE_DIRECTORY = "esdeSync.directory"
         const val PREF_GAMELIST_DIRECTORY = "esdeSync.gamelistDirectory"
         const val PREF_APPLICATION_PACKAGE = "esdeSync.applicationPackage"

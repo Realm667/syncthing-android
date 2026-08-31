@@ -34,6 +34,29 @@ class EsdeSharedSettingsManagerTest {
         assertEquals(navigation.specs.mapTo(mutableSetOf()) { it.name }, selectedNames)
         assertTrue("DisplayClock" in selectedNames)
         assertFalse("ScraperUsernameScreenScraper" in selectedNames)
+        assertFalse("CollectionSystemsCustom" in EsdeSharedSettingsCatalog.specs.map { it.name })
+        assertTrue("CollectionSystemsCustom" in EsdeSharedSettingsCatalog.byName)
+    }
+
+    @Test fun customCollectionOwnershipNeverConflictsWithSharedSettings() {
+        val fixture = fixture("""
+            <string name="CollectionSystemsCustom" value="Favorites,Top" />
+            <bool name="DisplayClock" value="false" />
+        """.trimIndent())
+        fixture.profile.writeText("""{"schemaVersion":1,"settings":{"CollectionSystemsCustom":{"type":"string","value":"Achievements"}}}""")
+
+        val imported = fixture.manager.importSelected(setOf("CollectionSystemsCustom"))
+        assertTrue(imported.successful)
+        assertEquals(1, imported.skipped)
+        assertEquals(
+            "Favorites,Top",
+            EsdeSettingsEditor().read(fixture.settings, setOf("CollectionSystemsCustom"))["CollectionSystemsCustom"]?.value,
+        )
+
+        val published = fixture.manager.publish(setOf("CollectionSystemsCustom"), allowInitialize = true)
+        assertTrue(published.successful)
+        assertEquals(1, published.skipped)
+        assertTrue(fixture.profile.readText().contains("Achievements"))
     }
 
     @Test fun legacySelectionsMigrateToContainingCategories() {

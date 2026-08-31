@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,9 +34,11 @@ import androidx.navigation3.runtime.EntryProviderScope
 import androidx.preference.PreferenceManager
 import com.nutomic.syncthingandroid.activities.FolderPickerActivity
 import com.nutomic.syncthingandroid.esdesync.EsdeIgnoreRuleManager
+import com.nutomic.syncthingandroid.esdesync.EsdeFirstSetupPolicy
 import com.nutomic.syncthingandroid.esdesync.EsdeSafeLaunchActivity
 import com.nutomic.syncthingandroid.esdesync.EsdeSharedSettingsCatalog
 import com.nutomic.syncthingandroid.esdesync.EsdeSyncSettings
+import com.nutomic.syncthingandroid.service.SyncthingService
 import me.zhanghai.compose.preference.Preference
 import me.zhanghai.compose.preference.SwitchPreference
 import me.zhanghai.compose.preference.rememberPreferenceState
@@ -50,23 +53,45 @@ fun SettingsGamingFirstSetupScreen() {
     val context = LocalContext.current
     val navigator = LocalSettingsNavigator.current
     val service = LocalSyncthingService.current
+    val serviceUpdateTick = LocalServiceUpdateTick.current
     val api = service?.api
     val preferences = remember { PreferenceManager.getDefaultSharedPreferences(context) }
     val settings = remember { EsdeSyncSettings(preferences) }
     val collectionsEnabled = rememberPreferenceState(EsdeSyncSettings.PREF_SHARED_COLLECTIONS_ENABLED, false)
     val sharedSettingsEnabled = rememberPreferenceState(EsdeSyncSettings.PREF_SHARED_SETTINGS_ENABLED, false)
-    var step by rememberSaveable { mutableStateOf(0) }
+    var step by rememberSaveable {
+        mutableStateOf(settings.firstSetupStep.coerceIn(0, SETUP_STEPS.lastIndex))
+    }
     var directory by remember { mutableStateOf(settings.esdeDirectory) }
     var gamelistDirectory by remember { mutableStateOf(settings.gamelistDirectory) }
     var applicationPackage by remember { mutableStateOf(settings.applicationPackage) }
     var primaryDevice by remember { mutableStateOf(settings.primaryDeviceId) }
     var selectedFolders by remember { mutableStateOf(settings.selectedFolderIds) }
     var role by remember { mutableStateOf(settings.firstSetupRole) }
+    var sourceInitialized by remember { mutableStateOf(settings.bootstrapComplete) }
     var feedback by remember { mutableStateOf("") }
     var showDevices by remember { mutableStateOf(false) }
     var showFolders by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) { settings.firstSetupOffered = true }
+    LaunchedEffect(Unit) {
+        settings.firstSetupOffered = true
+        settings.enabled = true
+        settings.acquireFirstSetupServiceLease()
+        val serviceIntent = Intent(context, SyncthingService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(serviceIntent)
+        } else {
+            context.startService(serviceIntent)
+        }
+    }
+    LaunchedEffect(service, serviceUpdateTick) {
+        service?.evaluateRunConditions()
+    }
+
+    fun selectStep(value: Int) {
+        step = value.coerceIn(0, SETUP_STEPS.lastIndex)
+        settings.firstSetupStep = step
+    }
 
     val directoryPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         result.data?.getStringExtra(FolderPickerActivity.EXTRA_RESULT_DIRECTORY)?.takeIf { result.resultCode == Activity.RESULT_OK }?.let {
@@ -78,6 +103,7 @@ fun SettingsGamingFirstSetupScreen() {
             }
             settings.bootstrapComplete = false
             settings.bootstrapPendingImport = false
+            sourceInitialized = false
         }
     }
     val gamelistPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -86,6 +112,7 @@ fun SettingsGamingFirstSetupScreen() {
             settings.gamelistDirectory = it
             settings.bootstrapComplete = false
             settings.bootstrapPendingImport = false
+            sourceInitialized = false
         }
     }
     val appPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -134,17 +161,20 @@ fun SettingsGamingFirstSetupScreen() {
         }
         coordinator.ensureLegacyGamelistLocation { success, message ->
             if (!success) {
-                step = 4
+                selectStep(4)
                 feedback = "ES-DE configuration failed: $message"
                 return@ensureLegacyGamelistLocation
             }
             EsdeIgnoreRuleManager(currentApi).ensure(selectedFolders) { result ->
                 (context as Activity).runOnUiThread {
                     if (result.conflicting > 0) {
-                        step = 4
+                        selectStep(4)
                         feedback = "${result.conflicting} folder(s) contain a conflicting gamelist.xml include rule. Review their ignore lists before finishing."
                     } else {
                         settings.firstSetupComplete = true
+                        settings.firstSetupStep = 0
+                        settings.releaseFirstSetupServiceLease()
+                        service.evaluateRunConditions()
                         context.startActivity(Intent(context, EsdeSafeLaunchActivity::class.java))
                         navigator.navigateUp()
                     }
@@ -155,6 +185,14 @@ fun SettingsGamingFirstSetupScreen() {
 
     val coreComplete = directory.isNotBlank() && gamelistDirectory.isNotBlank() && applicationPackage.isNotBlank() &&
         primaryDevice.isNotBlank() && selectedFolders.isNotEmpty()
+    val syncTargetsReady = EsdeFirstSetupPolicy.canChooseSyncTargets(api != null)
+    val canFinish = EsdeFirstSetupPolicy.canFinish(
+        coreComplete = coreComplete,
+        apiReady = api != null,
+        coordinatorReady = service?.esdeSyncCoordinator != null,
+        role = role,
+        sourceInitialized = sourceInitialized,
+    )
 
     SettingsScaffold(
         title = "ES-DE Gaming Sync · First Setup",
@@ -203,8 +241,9 @@ fun SettingsGamingFirstSetupScreen() {
             }
             2 -> {
                 item { SetupHeading("Primary device and synchronized folders") }
-                item { Preference(title = { Text("Primary Gaming Sync Device") }, summary = { Text(api?.getDevices(false)?.firstOrNull { it.deviceID == primaryDevice }?.displayName ?: primaryDevice.ifBlank { "Not selected · choose the authoritative NAS or desktop" }) }, enabled = api != null, onClick = { showDevices = true }) }
-                item { Preference(title = { Text("Gaming Sync Folders") }, summary = { Text(if (selectedFolders.isEmpty()) "Not selected" else "${selectedFolders.size} selected · every save, settings, ROM metadata and collection folder must be included") }, enabled = api != null, onClick = { showFolders = true }) }
+                if (!syncTargetsReady) item { Preference(title = { Text("Starting Syncthing…") }, summary = { Text("SafeSync keeps Syncthing active during First Setup. The device and folder choices unlock automatically as soon as its local API is ready.") }) }
+                item { Preference(title = { Text("Primary Gaming Sync Device") }, summary = { Text(api?.getDevices(false)?.firstOrNull { it.deviceID == primaryDevice }?.displayName ?: primaryDevice.ifBlank { "Not selected · choose the authoritative NAS or desktop" }) }, enabled = syncTargetsReady, onClick = { showDevices = true }) }
+                item { Preference(title = { Text("Gaming Sync Folders") }, summary = { Text(if (selectedFolders.isEmpty()) "Not selected" else "${selectedFolders.size} selected · every save, settings, ROM metadata and collection folder must be included") }, enabled = syncTargetsReady, onClick = { showFolders = true }) }
                 item { Preference(title = { Text("Folder requirement") }, summary = { Text("Every selected folder must be shared with the primary device. Friendly labels and local path names are shown instead of technical IDs.") }) }
             }
             3 -> {
@@ -247,11 +286,14 @@ fun SettingsGamingFirstSetupScreen() {
                             coordinator.initializeFromThisDevice { result ->
                                 if (result.blockedByExistingSidecars) {
                                     feedback = "Existing sidecars found; source initialization was safely blocked."
+                                } else if (result.export.gamesRead == 0) {
+                                    feedback = "No games were found. Check the gamelist root before using this device as the initial source."
                                 } else {
                                     coordinator.publishSharedSettings { settingsResult ->
                                         coordinator.publishSharedCollections { collectionsResult ->
                                             feedback = "Created ${result.export.sidecarsWritten} initial sidecar(s). " +
                                                 settingsResult.summary("Settings") + "; " + collectionsResult.summary("Collections")
+                                            sourceInitialized = settings.bootstrapComplete
                                         }
                                     }
                                 }
@@ -269,15 +311,26 @@ fun SettingsGamingFirstSetupScreen() {
                     context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
                 }) }
                 item { Preference(title = { Text("After every play session") }, summary = { Text("Close the emulator, return to ES-DE, press Home, keep SafeSync open and wait for SAFE TO SWITCH DEVICE before changing handhelds or powering off.") }) }
-                item { Preference(title = { Text(if (coreComplete) "Ready to finish" else "Setup incomplete") }, summary = { Text(if (coreComplete) "The core selections are complete. Safe Launch performs the final live synchronization checks." else "Select ES-DE, both directories, a primary device and at least one Gaming Sync Folder.") }) }
+                item { Preference(title = { Text(if (canFinish) "Ready to finish" else "Setup incomplete") }, summary = { Text(when {
+                    !coreComplete -> "Select ES-DE, both directories, a primary device and at least one Gaming Sync Folder."
+                    role == EsdeSyncSettings.ROLE_SOURCE && !sourceInitialized -> "Create the initial metadata source on the Safety step before finishing."
+                    !syncTargetsReady -> "Syncthing is still starting. The finish button unlocks automatically."
+                    else -> "The core selections are complete. Safe Launch performs the final live synchronization checks."
+                }) }) }
             }
         }
         item {
             Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = { if (step == 0) navigator.navigateUp() else step-- }) { Text(if (step == 0) "SET UP LATER" else "BACK") }
-                if (step < SETUP_STEPS.lastIndex) Button(onClick = { settings.enabled = true; step++ }) { Text("NEXT") }
+                TextButton(onClick = {
+                    if (step == 0) {
+                        settings.releaseFirstSetupServiceLease()
+                        service?.evaluateRunConditions()
+                        navigator.navigateUp()
+                    } else selectStep(step - 1)
+                }) { Text(if (step == 0) "SET UP LATER" else "BACK") }
+                if (step < SETUP_STEPS.lastIndex) Button(onClick = { settings.enabled = true; selectStep(step + 1) }) { Text("NEXT") }
                 else Button(
-                    enabled = coreComplete && api != null && service.esdeSyncCoordinator != null,
+                    enabled = canFinish,
                     onClick = ::finishSetup,
                 ) { Text("FINISH & OPEN SAFE LAUNCH") }
             }
