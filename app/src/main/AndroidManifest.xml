@@ -312,6 +312,7 @@
     </application>
 
     <queries>
+        <package android:name="com.github.catfriend1.syncthingfork" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />

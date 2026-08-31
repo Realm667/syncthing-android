@@ -187,7 +187,12 @@ jobs:
           set -eu
           unset ANDROID_NDK_HOME
           git config --global --add safe.directory '*'
-          ./gradlew --no-daemon buildNative test${{ inputs.buildType }}UnitTest lint${{ inputs.buildType }} assemble${{ inputs.buildType }} ${{ inputs.gradleOptions }}
+          TEST_BUILD_TYPE="${{ inputs.buildType }}"
+          if [ "${TEST_BUILD_TYPE}" = "Release" ]; then
+            # This project only defines local JVM tests for the debug variant.
+            TEST_BUILD_TYPE="Debug"
+          fi
+          ./gradlew --no-daemon buildNative test${TEST_BUILD_TYPE}UnitTest lint${{ inputs.buildType }} assemble${{ inputs.buildType }} ${{ inputs.gradleOptions }}
 
       - name: Save prebuilt native libraries to cache
         run: |

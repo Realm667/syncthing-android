@@ -732,6 +732,13 @@
     <string name="backup_password_summary">ℹ️ Empfohlen:\nGeben Sie ein sicheres Passwort ein, um Ihre Konfiguration beim Export zu verschlüsseln und beim Import zu entschlüsseln. Bewahren Sie dieses Passwort für den Wiederherstellungsprozess an einem sicheren Ort auf. Sie benötigen es, um die Importfunktion zu nutzen.\n\n⚠️ Nicht empfohlen:\nWenn Sie kein Passwort verwenden, können andere Anwendungen möglicherweise Ihre Syncthing-Konfiguration lesen und manipulieren. Die Preisgabe der Konfiguration birgt das Risiko, dass ein bösartiger Akteur mit gestohlenen Konfigurationsexporten unbefugten Zugriff auf Ihre Dateien erhält.</string>
     <string name="preference_category_explanation">Erklärung</string>
     <string name="config_import_failed_no_path">Der Import der Konfiguration ist fehlgeschlagen. Gehen Sie zu Einstellungen&gt;Fehlerbehebung&gt;Protokoll öffnen, um Details zu sehen.</string>
+    <string name="legacy_migration_title">Vorhandenen Syncthing-Fork migrieren</string>
+    <string name="legacy_migration_description">Android isoliert private App-Daten, daher ist kein stilles direktes Kopieren möglich. 1. Öffne den vorhandenen Syncthing-Fork und wähle Einstellungen → Import und Export → Konfiguration exportieren. 2. Öffne anschließend dessen Android-App-Info und erzwinge das Beenden. 3. Kehre hierher zurück und importiere das Archiv. Dadurch werden Syncthing-Geräteidentität, Ordner, Geräte, Index und App-Einstellungen übertragen. Beim Import muss dasselbe Exportpasswort eingegeben werden.</string>
+    <string name="legacy_migration_open_original">Syncthing-Fork zum Exportieren öffnen</string>
+    <string name="legacy_migration_stop_original">App-Info zum Beenden öffnen</string>
+    <string name="legacy_migration_import">Exportierte Konfiguration importieren</string>
+    <string name="legacy_migration_skip">Ohne Migration fortfahren</string>
+    <string name="legacy_migration_original_unavailable">Der installierte Syncthing-Fork konnte nicht geöffnet werden.</string>
     <string name="backup_password_set_masked">✅ Passwort festgelegt – Zum Ändern tippen</string>
     <string name="toggle_password_visibility">Passwort ein-/ausblenden</string>
     <string name="allow_overwrite_files_title">Überschreiben vorhandener Dateien zulassen</string>

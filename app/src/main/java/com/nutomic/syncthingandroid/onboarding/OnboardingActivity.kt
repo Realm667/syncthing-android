@@ -24,6 +24,8 @@ import com.nutomic.syncthingandroid.R
 import com.nutomic.syncthingandroid.SyncthingApp
 import com.nutomic.syncthingandroid.activities.MainActivity
 import com.nutomic.syncthingandroid.activities.ThemedAppCompatActivity
+import com.nutomic.syncthingandroid.esdesync.LegacySyncthingMigration
+import com.nutomic.syncthingandroid.settings.SettingsActivity
 import com.nutomic.syncthingandroid.webgui.WebGuiActivity
 import com.nutomic.syncthingandroid.service.Constants
 import com.nutomic.syncthingandroid.service.SyncthingRunnable.ExecutableNotFoundException
@@ -46,6 +48,7 @@ data class OnboardingUiState(
     val hasLocationPermission: Boolean = false,
     val hasNotificationPermission: Boolean = false,
     val hasConfig: Boolean = false,
+    val legacyPackageInstalled: Boolean = false,
     val isRunningOnTv: Boolean = false,
     val keyGenerationRunning: Boolean = false,
     val keyGenerationFailed: Boolean = false,
@@ -152,6 +155,7 @@ class OnboardingActivity : ThemedAppCompatActivity() {
         val haveLocationPermission = haveLocationPermission()
         val haveNotificationPermission = haveNotificationPermission()
         val haveConfig = checkForParseableConfig()
+        val legacyPackageInstalled = LegacySyncthingMigration.isLegacyPackageInstalled(this)
 
         // On recreation (e.g. rotation) restore the entire previous UI state so nothing resets,
         // including the page set, which is decided once and must stay stable for the whole flow.
@@ -172,6 +176,7 @@ class OnboardingActivity : ThemedAppCompatActivity() {
             hasLocationPermission = haveLocationPermission,
             hasNotificationPermission = haveNotificationPermission,
             hasConfig = haveConfig,
+            legacyPackageInstalled = legacyPackageInstalled,
             isRunningOnTv = isRunningOnTv,
             // A key-generation coroutine cannot survive recreation, so never restore it as running.
             keyGenerationRunning = false,
@@ -179,6 +184,9 @@ class OnboardingActivity : ThemedAppCompatActivity() {
             pages = listOfNotNull(
                 OnboardingPage.WELCOME,
                 OnboardingPage.STORAGE_PERMISSION.takeUnless { haveStoragePermission },
+                OnboardingPage.LEGACY_MIGRATION.takeIf {
+                    LegacySyncthingMigration.shouldOffer(haveConfig, legacyPackageInstalled)
+                },
                 OnboardingPage.BATTERY_OPTIMIZATION.takeUnless { haveIgnoreDozePermission },
                 OnboardingPage.LOCATION_PERMISSION.takeUnless { haveLocationPermission },
                 OnboardingPage.NOTIFICATION_PERMISSION.takeUnless { haveNotificationPermission },
@@ -189,6 +197,7 @@ class OnboardingActivity : ThemedAppCompatActivity() {
             hasLocationPermission = haveLocationPermission,
             hasNotificationPermission = haveNotificationPermission,
             hasConfig = haveConfig,
+            legacyPackageInstalled = legacyPackageInstalled,
             isRunningOnTv = isRunningOnTv,
             keyGenerationStatus = getString(R.string.web_gui_creating_key),
         )
@@ -212,6 +221,9 @@ class OnboardingActivity : ThemedAppCompatActivity() {
                         onBack = ::handleBack,
                         onContinue = ::advance,
                         onFinishOnboarding = ::startApp,
+                        onOpenLegacyApp = ::openLegacyApp,
+                        onOpenLegacyAppDetails = ::openLegacyAppDetails,
+                        onOpenLegacyImport = ::openLegacyImport,
                         onGrantLocationPermission = ::requestLocationPermission,
                         onGrantNotificationPermission = ::requestNotificationPermission,
                     )
@@ -246,6 +258,11 @@ class OnboardingActivity : ThemedAppCompatActivity() {
         if (currentPage == OnboardingPage.STORAGE_PERMISSION &&
             !oldState.hasStoragePermission &&
             uiState.hasStoragePermission
+        ) {
+            advance()
+        } else if (currentPage == OnboardingPage.LEGACY_MIGRATION &&
+            !oldState.hasConfig &&
+            uiState.hasConfig
         ) {
             advance()
         } else if (currentPage == OnboardingPage.BATTERY_OPTIMIZATION &&
@@ -340,7 +357,25 @@ class OnboardingActivity : ThemedAppCompatActivity() {
             hasLocationPermission = haveLocationPermission(),
             hasNotificationPermission = haveNotificationPermission(),
             hasConfig = checkForParseableConfig(),
+            legacyPackageInstalled = LegacySyncthingMigration.isLegacyPackageInstalled(this),
         )
+    }
+
+    private fun openLegacyApp() {
+        if (!LegacySyncthingMigration.launchLegacyApp(this)) {
+            Toast.makeText(this, R.string.legacy_migration_original_unavailable, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun openLegacyAppDetails() {
+        LegacySyncthingMigration.openLegacyAppDetails(this)
+    }
+
+    private fun openLegacyImport() {
+        val intent = Intent(this, SettingsActivity::class.java).apply {
+            putExtra(SettingsActivity.EXTRA_START_DESTINATION, "ImportExport")
+        }
+        startActivity(intent)
     }
 
     private fun haveStoragePermission(): Boolean {

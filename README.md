@@ -51,10 +51,16 @@ built, test-signed, and published with SHA-256 checksums under
 public test signature is stable for upgrades but is not a trusted production or
 store signature.
 
+When the original Syncthing-Fork is installed beside a fresh ES-DE Sync
+installation, onboarding offers a guided configuration migration. It uses the
+original app's encrypted export/import archive because Android prevents direct
+access to another package's private data, and preserves the Syncthing identity,
+folders, devices, index, and compatible app settings.
+
 > **Do not run this fork and the original Syncthing-Fork against the same local
 > folders at the same time.** Stop or disable the original app first. This fork
-> has its own application ID and Syncthing device identity; authorize that new
-> device separately on your NAS.
+> has its own application ID. A completed migration preserves the Syncthing
+> identity; skipping it creates a new device that must be authorized on your NAS.
 
 ## Acknowledgments
 

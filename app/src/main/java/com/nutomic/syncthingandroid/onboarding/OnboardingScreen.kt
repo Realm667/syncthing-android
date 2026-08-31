@@ -18,6 +18,9 @@ fun OnboardingScreen(
     onBack: () -> Unit,
     onContinue: () -> Unit,
     onFinishOnboarding: () -> Unit,
+    onOpenLegacyApp: () -> Unit,
+    onOpenLegacyAppDetails: () -> Unit,
+    onOpenLegacyImport: () -> Unit,
     onGrantLocationPermission: () -> Unit,
     onGrantNotificationPermission: () -> Unit,
 ) {
@@ -45,6 +48,9 @@ fun OnboardingScreen(
             onBack = onBack,
             onContinue = onContinue,
             onFinishOnboarding = onFinishOnboarding,
+            onOpenLegacyApp = onOpenLegacyApp,
+            onOpenLegacyAppDetails = onOpenLegacyAppDetails,
+            onOpenLegacyImport = onOpenLegacyImport,
             onGrantLocationPermission = onGrantLocationPermission,
             onGrantNotificationPermission = onGrantNotificationPermission,
         )

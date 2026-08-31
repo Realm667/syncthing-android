@@ -1,6 +1,7 @@
 package com.nutomic.syncthingandroid.onboarding
 
 import androidx.compose.runtime.Composable
+import com.nutomic.syncthingandroid.esdesync.LegacyMigrationPage
 import com.nutomic.syncthingandroid.onboarding.pages.BatteryOptimizationPage
 import com.nutomic.syncthingandroid.onboarding.pages.KeyGenerationPage
 import com.nutomic.syncthingandroid.onboarding.pages.LocationPermissionPage
@@ -14,6 +15,7 @@ import com.nutomic.syncthingandroid.onboarding.pages.WelcomePage
 enum class OnboardingPage {
     WELCOME,
     STORAGE_PERMISSION,
+    LEGACY_MIGRATION,
     BATTERY_OPTIMIZATION,
     LOCATION_PERMISSION,
     NOTIFICATION_PERMISSION,
@@ -32,6 +34,9 @@ fun OnboardingPage(
     onBack: () -> Unit,
     onContinue: () -> Unit,
     onFinishOnboarding: () -> Unit,
+    onOpenLegacyApp: () -> Unit,
+    onOpenLegacyAppDetails: () -> Unit,
+    onOpenLegacyImport: () -> Unit,
     onGrantLocationPermission: () -> Unit,
     onGrantNotificationPermission: () -> Unit,
 ) {
@@ -49,6 +54,16 @@ fun OnboardingPage(
             requestTvFocus = requestTvFocus,
             onBack = onBack,
             onContinue = onContinue,
+        )
+        OnboardingPage.LEGACY_MIGRATION -> LegacyMigrationPage(
+            uiState = uiState,
+            pageIndex = pageIndex,
+            requestTvFocus = requestTvFocus,
+            onBack = onBack,
+            onSkip = onContinue,
+            onOpenLegacyApp = onOpenLegacyApp,
+            onOpenLegacyAppDetails = onOpenLegacyAppDetails,
+            onOpenImport = onOpenLegacyImport,
         )
         OnboardingPage.BATTERY_OPTIMIZATION -> BatteryOptimizationPage(
             uiState = uiState,

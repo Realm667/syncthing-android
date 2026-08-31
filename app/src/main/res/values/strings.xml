@@ -699,6 +699,14 @@
 
     <string name="config_import_failed_no_path">Config import failed. Go to Settings-Troubleshooting-Open log to see details.</string>
 
+    <string name="legacy_migration_title">Migrate existing Syncthing-Fork</string>
+    <string name="legacy_migration_description">Android isolates private app data, so a silent direct copy is not possible. 1. Open the existing Syncthing-Fork and select Settings → Import and Export → Export Configuration. 2. Open its Android app info and force stop it. 3. Return here and import the archive. This transfers the Syncthing device identity, folders, devices, index, and app settings. Enter the same export password during import.</string>
+    <string name="legacy_migration_open_original">Open Syncthing-Fork to export</string>
+    <string name="legacy_migration_stop_original">Open app info to stop original</string>
+    <string name="legacy_migration_import">Import exported configuration</string>
+    <string name="legacy_migration_skip">Continue without migration</string>
+    <string name="legacy_migration_original_unavailable">The installed Syncthing-Fork could not be opened.</string>
+
     <string name="dialog_settings_restart_app_title">Restart required</string>
     <string name="dialog_settings_restart_app_question">Changing this option requires an immediate restart of the app. All other changes will be discarded. Continue\?</string>
 

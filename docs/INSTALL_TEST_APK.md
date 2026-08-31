@@ -49,12 +49,33 @@ official Syncthing-Fork.
 
 Do **not** let the original app and this fork synchronize the same local folders
 at the same time. Fully stop/disable the original first. This fork intentionally
-creates a separate Syncthing device identity. Add and approve that device on the
-QNAP; identities are never copied automatically.
+uses a separate Android package. A completed configuration migration preserves
+the original Syncthing device identity; skipping migration creates a new one
+that must be approved separately on the QNAP.
+
+## Migrate an existing Syncthing-Fork installation
+
+On a fresh installation, onboarding detects the original package
+`com.github.catfriend1.syncthingfork` and offers a migration page. Android does
+not permit one application to read another application's private files, so the
+migration deliberately uses Syncthing-Fork's existing configuration archive:
+
+1. Open the original app from the migration page and use **Settings → Import
+   and Export → Export Configuration**.
+2. Remember the export password and keep the default archive path, or enter the
+   same custom path later.
+3. Use the migration page's app-info button to force-stop the original app.
+4. Open the import screen, enter the same path and password, and import.
+
+The archive transfers the Syncthing configuration, device certificate and
+identity, configured folders and devices, index database, and Android app
+preferences. ES-DE-specific preferences that do not exist in the original app
+retain their safe defaults. After a successful import, onboarding detects the
+restored configuration and continues without generating a new identity.
 
 ## First setup
 
-1. Stop the original Syncthing-Fork.
+1. Migrate and stop the original Syncthing-Fork, or skip migration and stop it.
 2. Start **Syncthing-Fork ES-DE Sync**, grant requested storage/notification
    access, and add the QNAP as a Syncthing peer.
 3. Connect ROM, save, save-state, and ES-DE data folders and wait for the initial
