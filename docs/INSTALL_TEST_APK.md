@@ -1,5 +1,24 @@
 # Install and test the ES-DE Sync APK
 
+## Get the current APK from GitHub Releases
+
+The recommended persistent download is the newest entry under
+[Realm667/syncthing-android Releases](https://github.com/Realm667/syncthing-android/releases).
+Choose the universal APK when available, or the APK matching the handheld's
+CPU architecture. `SHA256SUMS.txt` contains the published checksums.
+
+GitHub checks the official Syncthing releases every six hours. When it detects a
+new release, it updates the submodule pointer and app version directly on
+`main`, creates a unique app tag, runs the full release build, signs the APK, and
+publishes it automatically. Failed publication can be retried without replacing
+an existing tag or release.
+
+These release APKs use the stable public test key and the application ID
+`com.github.danielgimmer.syncthingesdesync`. They can update earlier release
+APKs from this fork, but they are deliberately not trusted production or store
+builds. The debug APK described below has the separate `.debug` application ID
+and is not updated by a release APK.
+
 ## Get a signed APK from GitHub Actions
 
 1. Open the fork on GitHub and select **Actions**.

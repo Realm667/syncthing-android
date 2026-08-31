@@ -18,6 +18,11 @@ on:
         description: 'Environment name'
         required: true
         type: string
+      usePublicTestKey:
+        description: 'Sign with the stable, public and untrusted test key'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   sign:
@@ -39,8 +44,8 @@ jobs:
           name: unsigned-${{ inputs.applicationId }}
           path: unsigned
 
-      - name: Sign debug APK
-        if: ${{ inputs.buildType == 'debug' }}
+      - name: Sign APK with public test key
+        if: ${{ inputs.buildType == 'debug' || inputs.usePublicTestKey }}
         run: |
           set -eu
           mkdir -p "${{ runner.temp }}/.android"
@@ -60,7 +65,7 @@ jobs:
           rm -f "${{ runner.temp }}/.android/debug.keystore"
 
       - name: Sign multiple release APK
-        if: ${{ inputs.buildType == 'release' }}
+        if: ${{ inputs.buildType == 'release' && !inputs.usePublicTestKey }}
         run: |
           set -eu
           shopt -s nullglob
@@ -101,5 +106,6 @@ jobs:
             echo "- APK: \`${APK_NAME}\`"
             if [ -n "${VERSION}" ]; then echo "- Version: \`${VERSION}\`"; fi
             echo "- Application ID: \`${APP_ID}\`"
+            if [ "${{ inputs.usePublicTestKey }}" = "true" ]; then echo "- Signature: public, untrusted test key"; fi
             echo "- Commit: \`${{ github.sha }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

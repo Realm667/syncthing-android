@@ -1,13 +1,13 @@
 # Syncthing-Fork - A Syncthing Wrapper for Android
 
 [![License: MPLv2](https://img.shields.io/badge/License-MPLv2-blue.svg)](https://opensource.org/licenses/MPL-2.0)
-<a href="https://github.com/researchxxl/syncthing-android/releases/latest" alt="GitHub release"><img src="https://img.shields.io/github/v/release/researchxxl/syncthing-android" /></a>
-<a href="https://tooomm.github.io/github-release-stats/?username=researchxxl&repository=syncthing-android" alt="GitHub Stats"><img src="https://img.shields.io/github/downloads/researchxxl/syncthing-android/total.svg" /></a>
+<a href="https://github.com/Realm667/syncthing-android/releases/latest" alt="GitHub release"><img src="https://img.shields.io/github/v/release/Realm667/syncthing-android" /></a>
+<a href="https://tooomm.github.io/github-release-stats/?username=Realm667&repository=syncthing-android" alt="GitHub Stats"><img src="https://img.shields.io/github/downloads/Realm667/syncthing-android/total.svg" /></a>
 <a href="https://f-droid.org/packages/com.github.catfriend1.syncthingfork" alt="F-Droid release"><img src="https://img.shields.io/f-droid/v/com.github.catfriend1.syncthingfork.svg" /></a>
 <a href="https://fdroid-metrics.streamlit.app/package_details?package=com.github.catfriend1.syncthingfork"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fgithub.com%2Fkitswas%2Ffdroid-metrics-dashboard%2Fraw%2Frefs%2Fheads%2Fmain%2Fprocessed%2Fmonthly%2Fcom.github.catfriend1.syncthingfork.json&query=%24.total_downloads&style=for-the-badge&logo=fdroid&label=F-Droid%20%F0%9F%93%A5%20last%20month" height="22" /></a>
 <a href="https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22com.github.catfriend1.syncthingfork%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2Fresearchxxl%2Fsyncthing-android%22%2C%22author%22%3A%22researchxxl%22%2C%22name%22%3A%22Syncthing-Fork%22%2C%22preferredApkIndex%22%3A0%2C%22additionalSettings%22%3A%22%7B%5C%22verifyLatestTag%5C%22%3Atrue%2C%5C%22apkFilterRegEx%5C%22%3A%5C%22com.github.catfriend1.syncthingfork%5C%22%7D%22%2C%22overrideSource%22%3Anull%7D"><img src="https://raw.githubusercontent.com/ImranR98/Obtainium/main/assets/graphics/badge_obtainium.png" alt="Get it on Obtainium" height="22"></a>
 <a href="https://hosted.weblate.org/projects/syncthing-fork/app/"><img src="https://hosted.weblate.org/widget/syncthing-fork/app/svg-badge.svg" alt="Translation status" /></a>
-[![Build App](https://github.com/researchxxl/syncthing-android/actions/workflows/build-app.yaml/badge.svg)](https://github.com/researchxxl/syncthing-android/actions/workflows/build-app.yaml)
+[![Build App](https://github.com/Realm667/syncthing-android/actions/workflows/build-app.yaml/badge.svg)](https://github.com/Realm667/syncthing-android/actions/workflows/build-app.yaml)
 
 A wrapper of [Syncthing](https://github.com/syncthing/syncthing) for Android. Head to the "releases" section or F-Droid for builds. Please seek help on the forum and/or social media apps first before creating issues on the tracker.
 
@@ -43,6 +43,13 @@ pending until a later successful synchronization.
 
 Read [the architecture](docs/ESDE_SYNC_ARCHITECTURE.md), [implementation plan](docs/ESDE_SYNC_IMPLEMENTATION_PLAN.md),
 and [test APK installation guide](docs/INSTALL_TEST_APK.md) before enabling it.
+
+The fork checks the official Syncthing releases every six hours. A newly
+published version is committed directly to `main`, assigned a unique app tag,
+built, test-signed, and published with SHA-256 checksums under
+[GitHub Releases](https://github.com/Realm667/syncthing-android/releases). The
+public test signature is stable for upgrades but is not a trusted production or
+store signature.
 
 > **Do not run this fork and the original Syncthing-Fork against the same local
 > folders at the same time.** Stop or disable the original app first. This fork
