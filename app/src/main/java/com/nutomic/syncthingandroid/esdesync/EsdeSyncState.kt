@@ -1,5 +1,7 @@
 package com.nutomic.syncthingandroid.esdesync
 
+import com.nutomic.syncthingandroid.model.RemoteNeedItem
+
 enum class EsdeSyncState {
     NOT_CONFIGURED,
     STARTING,
@@ -31,6 +33,10 @@ data class EsdeFolderHealth(
     val remoteNeedItems: Long = 0,
     val remoteState: String = "valid",
     val label: String = id,
+    val conflictFiles: List<String> = emptyList(),
+    val remoteNeedKnown: Boolean = false,
+    val remoteBlockingItems: Long = 0,
+    val remoteIgnoredItems: Long = 0,
 )
 
 data class EsdeGateInput(
@@ -51,12 +57,28 @@ object EsdeSyncStateEvaluator {
             return EsdeSyncState.ERROR
         }
         if (input.folders.any { it.paused }) return EsdeSyncState.ERROR
-        if (input.folders.any {
-                it.state != "idle" || it.needFiles > 0 || it.needBytes > 0 || it.needTotalItems > 0 ||
-                    it.remoteCompletion < 100 || it.remoteNeedBytes > 0.0 || it.remoteNeedItems > 0 ||
-                    it.remoteState != "valid"
+        if (input.folders.any { folder ->
+                val rawRemotePending = folder.remoteCompletion < 100 || folder.remoteNeedBytes > 0.0 ||
+                    folder.remoteNeedItems > 0
+                val blockingRemotePending = if (folder.remoteNeedKnown) {
+                    folder.remoteBlockingItems > 0
+                } else {
+                    rawRemotePending
+                }
+                folder.state != "idle" || folder.needFiles > 0 || folder.needBytes > 0 ||
+                    folder.needTotalItems > 0 || blockingRemotePending || folder.remoteState != "valid"
             }) return EsdeSyncState.SYNCING
         return EsdeSyncState.READY_TO_PLAY
+    }
+}
+
+object EsdeRemoteNeedPolicy {
+    fun isBlocking(item: RemoteNeedItem): Boolean {
+        val path = item.name.replace('\\', '/').trimStart('/')
+        if (path.isBlank()) return true
+        if (path.substringAfterLast('/').equals("gamelist.xml", ignoreCase = true)) return false
+        if (item.type.contains("DIRECTORY", ignoreCase = true)) return false
+        return true
     }
 }
 

@@ -1,6 +1,11 @@
 package com.nutomic.syncthingandroid.esdesync
 
+import com.google.gson.Gson
+import com.nutomic.syncthingandroid.model.RemoteNeed
+import com.nutomic.syncthingandroid.model.RemoteNeedItem
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EsdeSyncStateEvaluatorTest {
@@ -14,12 +19,36 @@ class EsdeSyncStateEvaluatorTest {
         assertEquals(EsdeSyncState.SYNCING, evaluate(healthy.copy(needFiles = 1)))
         assertEquals(EsdeSyncState.SYNCING, evaluate(healthy.copy(needBytes = 1)))
         assertEquals(EsdeSyncState.SYNCING, evaluate(healthy.copy(remoteCompletion = 99)))
+        assertEquals(
+            EsdeSyncState.READY_TO_PLAY,
+            evaluate(healthy.copy(remoteCompletion = 99, remoteNeedItems = 3, remoteNeedKnown = true, remoteIgnoredItems = 3)),
+        )
+        assertEquals(
+            EsdeSyncState.SYNCING,
+            evaluate(healthy.copy(remoteCompletion = 99, remoteNeedKnown = true, remoteBlockingItems = 1)),
+        )
         assertEquals(EsdeSyncState.SYNCING, evaluate(healthy.copy(needTotalItems = 1)))
         assertEquals(EsdeSyncState.SYNCING, evaluate(healthy.copy(remoteNeedBytes = 1.0)))
         assertEquals(EsdeSyncState.SYNCING, evaluate(healthy.copy(remoteNeedItems = 1)))
         assertEquals(EsdeSyncState.SYNCING, evaluate(healthy.copy(remoteState = "paused")))
         assertEquals(EsdeSyncState.ERROR, evaluate(healthy.copy(conflicts = 1)))
         assertEquals(EsdeSyncState.ERROR, evaluate(healthy.copy(pullErrors = 1)))
+    }
+
+    @Test fun remoteNeedIgnoresOnlySafeNonContentEntries() {
+        assertFalse(EsdeRemoteNeedPolicy.isBlocking(item("gba/gamelist.xml", "FILE_INFO_TYPE_FILE")))
+        assertFalse(EsdeRemoteNeedPolicy.isBlocking(item("PSP/SYSTEM/CACHE", "FILE_INFO_TYPE_DIRECTORY")))
+        assertTrue(EsdeRemoteNeedPolicy.isBlocking(item("gb/.esde-sync/Batman.zip.esde.json", "FILE_INFO_TYPE_FILE")))
+        assertTrue(EsdeRemoteNeedPolicy.isBlocking(item("SAVEDATA/game/save.dat", "FILE_INFO_TYPE_FILE")))
+    }
+
+    @Test fun remoteNeedRestPayloadReadsFilesArray() {
+        val payload = """{"files":[{"name":"gba/gamelist.xml","type":"FILE_INFO_TYPE_FILE","size":42}],"page":1,"perpage":1000}"""
+        val need = Gson().fromJson(payload, RemoteNeed::class.java)
+
+        assertEquals(1, need.allItems().size)
+        assertEquals("gba/gamelist.xml", need.allItems().single().name)
+        assertEquals(42L, need.allItems().single().size)
     }
 
     @Test fun bootstrapNeverChoosesLocalAuthorityAutomatically() {
@@ -65,4 +94,9 @@ class EsdeSyncStateEvaluatorTest {
     private fun evaluate(folder: EsdeFolderHealth, connected: Boolean = true) = EsdeSyncStateEvaluator.evaluate(
         EsdeGateInput(true, true, connected, false, listOf(folder))
     )
+
+    private fun item(name: String, type: String) = RemoteNeedItem().apply {
+        this.name = name
+        this.type = type
+    }
 }

@@ -12,11 +12,12 @@ import javax.xml.parsers.DocumentBuilderFactory
 data class EsdeCollectionDefinition(val name: String, val filters: Map<String, String>)
 
 class EsdeCollectionCodec {
-    fun read(file: File): EsdeCollectionDefinition {
+    fun read(file: File): EsdeCollectionDefinition = readCandidate(file, file.nameWithoutExtension)
+
+    internal fun readCandidate(file: File, expectedName: String): EsdeCollectionDefinition {
         require(file.isFile) { "Missing collection file" }
         require(file.length() in 1..MAX_BYTES) { "Collection file has invalid size" }
         require(file.extension.equals(EXTENSION, true)) { "Collection file must use .$EXTENSION" }
-        val expectedName = file.nameWithoutExtension
         validateName(expectedName)
         if (containsAsciiIgnoreCase(file, "<!DOCTYPE")) throw SAXException("DOCTYPE is forbidden")
 

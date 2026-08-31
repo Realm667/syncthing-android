@@ -47,6 +47,7 @@ import com.nutomic.syncthingandroid.model.PendingFolder;
 import com.nutomic.syncthingandroid.model.RemoteCompletion;
 import com.nutomic.syncthingandroid.model.RemoteCompletionInfo;
 import com.nutomic.syncthingandroid.model.RemoteIgnoredDevice;
+import com.nutomic.syncthingandroid.model.RemoteNeed;
 import com.nutomic.syncthingandroid.model.SharedWithDevice;
 import com.nutomic.syncthingandroid.model.SystemStatus;
 import com.nutomic.syncthingandroid.model.SystemVersion;
@@ -886,6 +887,20 @@ public class RestApi {
         new GetRequest(mContext, mUrl, GetRequest.URI_DB_COMPLETION, mApiKey,
                 ImmutableMap.of("folder", folderId, "device", deviceId), result ->
                         listener.onResult(mGson.fromJson(result, CompletionInfo.class)),
+                error -> errorListener.run());
+    }
+
+    /** Lists the concrete items a remote device still needs for a folder. */
+    public void getFreshRemoteNeed(String folderId, String deviceId,
+                                   OnResultListener1<RemoteNeed> listener,
+                                   Runnable errorListener) {
+        new GetRequest(mContext, mUrl, GetRequest.URI_DB_REMOTE_NEED, mApiKey,
+                ImmutableMap.of(
+                        "folder", folderId,
+                        "device", deviceId,
+                        "page", "1",
+                        "perpage", "1000"
+                ), result -> listener.onResult(mGson.fromJson(result, RemoteNeed.class)),
                 error -> errorListener.run());
     }
 

@@ -8,6 +8,7 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -26,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.EntryProviderScope
 import androidx.preference.PreferenceManager
@@ -209,9 +211,23 @@ fun SettingsGamingFirstSetupScreen() {
                 item { SwitchPreference(title = { Text("Shared ES-DE Settings") }, summary = { Text("The category switches choose what is synchronized; they do not change an ES-DE feature's value.") }, state = sharedSettingsEnabled) }
                 EsdeSharedSettingsCatalog.categories.forEach { category -> item {
                     val state = rememberPreferenceState(EsdeSyncSettings.PREF_SHARED_SETTING_CATEGORY_PREFIX + category.id, false)
-                    SwitchPreference(title = { Text(category.title) }, summary = { Text(category.summary) }, state = state, enabled = sharedSettingsEnabled.value)
+                    SwitchPreference(
+                        title = { Text(category.title) },
+                        summary = {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(category.summary)
+                                if (category.id == "theme") {
+                                    Text(
+                                        "Note: Theme files must be installed locally. Missing themes are skipped with a warning and never block Safe Launch.",
+                                        fontStyle = FontStyle.Italic,
+                                    )
+                                }
+                            }
+                        },
+                        state = state,
+                        enabled = sharedSettingsEnabled.value,
+                    )
                 } }
-                item { Preference(title = { Text("Theme note") }, summary = { Text("Theme selection can be shared, but theme files must be installed locally. Missing themes are skipped with a warning and never block Safe Launch.") }) }
             }
             4 -> {
                 item { SetupHeading("Automatic safety checks") }

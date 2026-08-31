@@ -166,14 +166,17 @@ ES-DE/RetroAchievements configuration.
 
 ## Known v1 boundaries
 
-- Syncthing sidecar conflicts are surfaced and block a green state; v1 does not
-  guess how to merge simultaneous offline edits of the same game.
+- Syncthing conflicts are surfaced and block a green state until the user chooses which copy to
+  keep. Both versions are privately backed up before a change; `gamelist.xml` always remains local
+  and can never be replaced from a conflict copy.
 - Filesystem paths use the wrapper's existing all-files permission and folder
   picker because Android `FileObserver` cannot reliably watch arbitrary SAF
   providers.
 - Completion is conservatively polled through the wrapper's folder status and
   primary-device completion caches. Their cache-miss paths issue REST reads;
   expensive completion queries are intentionally not fired continuously.
+- Safe Launch classifies the primary device's concrete remote needs. Historical `gamelist.xml`
+  and directory-only items do not block launch; any unlisted or content-bearing need fails closed.
 - Android's unused-app protection is controlled only by the user. The app links
   directly to App info but cannot silently disable the switch during install.
 - Automatic ES-DE process-exit callbacks do not exist on Android. Returning to

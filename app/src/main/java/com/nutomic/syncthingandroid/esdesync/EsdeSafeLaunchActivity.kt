@@ -17,10 +17,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -28,6 +31,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,19 +39,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.preference.PreferenceManager
+import com.nutomic.syncthingandroid.activities.MainActivity
 import com.nutomic.syncthingandroid.activities.SyncthingActivity
 import com.nutomic.syncthingandroid.model.Folder
 import com.nutomic.syncthingandroid.model.FolderStatus
 import com.nutomic.syncthingandroid.model.CompletionInfo
+import com.nutomic.syncthingandroid.model.RemoteNeed
 import com.nutomic.syncthingandroid.service.Constants
 import com.nutomic.syncthingandroid.service.SyncthingService
 import com.nutomic.syncthingandroid.settings.SettingsActivity
 import com.nutomic.syncthingandroid.theme.ApplicationTheme
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
 class EsdeSafeLaunchActivity : SyncthingActivity() {
@@ -65,6 +74,14 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     private var pollStartedAt = 0L
     private val freshFolderStatus = ConcurrentHashMap<String, FolderStatus>()
     private val freshRemoteCompletion = ConcurrentHashMap<String, CompletionInfo>()
+    private val freshRemoteNeed = ConcurrentHashMap<String, RemoteNeed>()
+    private val freshRemoteNeedFetchedAt = ConcurrentHashMap<String, Long>()
+    private val conflictExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "ESDESync-ConflictResolver")
+    }
+    private var conflictFolder by mutableStateOf<EsdeFolderHealth?>(null)
+    private var pendingConflictResolution by mutableStateOf<PendingConflictResolution?>(null)
+    private var conflictFeedback by mutableStateOf("")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -202,9 +219,46 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         val remaining = AtomicInteger(ids.size * 2)
         fun done() { if (remaining.decrementAndGet() == 0) handler.post(onComplete) }
         ids.forEach { id ->
-            api.getFreshFolderStatus(id, { status -> freshFolderStatus[id] = status; done() }, { done() })
+            api.getFreshFolderStatus(id, { status -> freshFolderStatus[id] = status; done() }, {
+                freshFolderStatus.remove(id)
+                done()
+            })
             api.getFreshFolderCompletion(id, settings.primaryDeviceId,
-                { completion -> freshRemoteCompletion[id] = completion; done() }, { done() })
+                { completion ->
+                    freshRemoteCompletion[id] = completion
+                    val rawRemotePending = completion.completion < 100 || completion.needBytes > 0.0 ||
+                        completion.needItems > 0
+                    if (!rawRemotePending) {
+                        freshRemoteNeed[id] = RemoteNeed()
+                        freshRemoteNeedFetchedAt[id] = System.currentTimeMillis()
+                        done()
+                    } else {
+                        val lastFetch = freshRemoteNeedFetchedAt[id] ?: 0L
+                        if (freshRemoteNeed.containsKey(id) &&
+                            System.currentTimeMillis() - lastFetch < REMOTE_NEED_REFRESH_MS
+                        ) {
+                            done()
+                        } else {
+                            api.getFreshRemoteNeed(id, settings.primaryDeviceId,
+                                { need ->
+                                    freshRemoteNeed[id] = need
+                                    freshRemoteNeedFetchedAt[id] = System.currentTimeMillis()
+                                    done()
+                                },
+                                {
+                                    freshRemoteNeed.remove(id)
+                                    freshRemoteNeedFetchedAt.remove(id)
+                                    done()
+                                })
+                        }
+                    }
+                },
+                {
+                    freshRemoteCompletion.remove(id)
+                    freshRemoteNeed.remove(id)
+                    freshRemoteNeedFetchedAt.remove(id)
+                    done()
+                })
         }
     }
 
@@ -225,6 +279,13 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             val status = freshFolderStatus[id] ?: statusPair.key
             val cache = statusPair.value
             val remote = freshRemoteCompletion[id]
+            val remoteNeed = freshRemoteNeed[id]
+            val remoteItems = remoteNeed?.allItems().orEmpty()
+            val listedBlocking = remoteItems.count(EsdeRemoteNeedPolicy::isBlocking).toLong()
+            val listedIgnored = remoteItems.size.toLong() - listedBlocking
+            val declaredRemoteNeed = remote?.needItems?.toLong() ?: remoteItems.size.toLong()
+            val unlistedItems = (declaredRemoteNeed - remoteItems.size).coerceAtLeast(0L)
+            val conflictFiles = cache.discoveredConflictFiles?.toList().orEmpty()
             EsdeFolderHealth(
                 id = id,
                 paused = folder.paused || cache.paused,
@@ -240,10 +301,14 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 pullErrors = status.pullErrors,
                 remoteCompletion = remote?.completion?.toInt() ?: api.getRemoteDeviceCompletion(settings.primaryDeviceId),
                 remoteNeedBytes = remote?.needBytes ?: api.getRemoteDeviceNeedBytes(settings.primaryDeviceId),
-                conflicts = cache.discoveredConflictFiles?.size ?: 0,
+                conflicts = conflictFiles.size,
                 remoteNeedItems = remote?.needItems?.toLong() ?: 0,
                 remoteState = remote?.remoteState ?: "unknown",
                 label = folderDisplayName(folder),
+                conflictFiles = conflictFiles,
+                remoteNeedKnown = remoteNeed != null,
+                remoteBlockingItems = listedBlocking + unlistedItems,
+                remoteIgnoredItems = listedIgnored,
             )
         }
         val next = EsdeSyncStateEvaluator.evaluate(
@@ -364,6 +429,46 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         beginPreSync()
     }
 
+    private fun resolveConflict(pending: PendingConflictResolution) {
+        val folder = api?.folders?.firstOrNull { it.id == pending.folderId }
+        val path = folder?.path
+        if (path.isNullOrBlank()) {
+            conflictFeedback = "The selected folder path is unavailable."
+            pendingConflictResolution = null
+            return
+        }
+        conflictFeedback = "Resolving ${pending.relativePath}…"
+        conflictExecutor.execute {
+            val result = runCatching {
+                EsdeConflictResolver(File(filesDir, "esde-sync/backups")).resolve(
+                    File(path),
+                    pending.relativePath,
+                    pending.resolution,
+                )
+            }
+            handler.post {
+                if (isFinishing) return@post
+                pendingConflictResolution = null
+                result.onSuccess {
+                    api?.getFolderStatus(pending.folderId)?.value?.let { cache ->
+                        cache.discoveredConflictFiles = cache.discoveredConflictFiles
+                            .filterNot { it == pending.relativePath }
+                            .toTypedArray()
+                    }
+                    conflictFolder = null
+                    conflictFeedback = "Conflict resolved. Both versions were backed up privately."
+                    retry()
+                }.onFailure { error ->
+                    conflictFeedback = "Conflict could not be resolved: ${error.message ?: "unknown error"}"
+                }
+            }
+        }
+    }
+
+    private fun openSyncthing() {
+        startActivity(Intent(this, MainActivity::class.java))
+    }
+
     private fun initializeFromThisDevice() {
         val coordinator = service?.esdeSyncCoordinator
         if (coordinator == null) {
@@ -415,6 +520,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        conflictExecutor.shutdownNow()
         if (isFinishing && settings.activeSessionId.isNotBlank()) {
             restoreForceState()
             settings.clearSession()
@@ -455,32 +561,51 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 }
             }
             InstructionCard()
-            folderHealth.forEach { health -> FolderCard(health) }
+            folderHealth.forEach { health -> FolderCard(health) { conflictFolder = health } }
+            if (conflictFeedback.isNotBlank()) {
+                Text(conflictFeedback, color = Color(0xFFD8A657), style = MaterialTheme.typography.bodyMedium)
+            }
             Spacer(Modifier.height(8.dp))
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 when (state) {
-                    EsdeSyncState.READY_TO_PLAY -> Button(onClick = { launchEsde(false) }) { Text("START ES-DE") }
+                    EsdeSyncState.READY_TO_PLAY -> Button(
+                        onClick = { launchEsde(false) },
+                        colors = ButtonDefaults.buttonColors(containerColor = SAFE_GREEN, contentColor = Color(0xFF10210E)),
+                    ) { Text("START ES-DE") }
                     EsdeSyncState.NOT_CONFIGURED -> {
                         if (settings.missingSafeLaunchRequirements() == setOf(EsdeSetupRequirement.INITIAL_METADATA_SOURCE)) {
                             Button(onClick = ::initializeFromThisDevice) { Text("USE LOCAL ANDROID GAMELISTS AS SOURCE") }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                             Button(onClick = ::openSettings) { Text("OPEN SETTINGS") }
-                            OutlinedButton(onClick = { launchEsde(true) }) { Text("START WITHOUT SYNC") }
+                            Button(
+                                onClick = { launchEsde(true) },
+                                colors = ButtonDefaults.buttonColors(containerColor = DANGER_RED, contentColor = Color.White),
+                            ) { Text("START WITHOUT SYNC") }
                         }
                     }
                     EsdeSyncState.SAFE_TO_SWITCH -> {
-                        Button(onClick = ::finishSession) { Text("DONE") }
+                        Button(
+                            onClick = ::finishSession,
+                            colors = ButtonDefaults.buttonColors(containerColor = SAFE_GREEN, contentColor = Color(0xFF10210E)),
+                        ) { Text("DONE") }
                         OutlinedButton(onClick = ::startAgain) { Text("START ES-DE AGAIN") }
                     }
                     EsdeSyncState.ERROR -> {
                         OutlinedButton(onClick = ::retry) { Text("RETRY") }
-                        OutlinedButton(onClick = { launchEsde(true) }) { Text("START WITHOUT SYNC") }
+                        OutlinedButton(onClick = ::openSyncthing) { Text("OPEN SYNCTHING") }
+                        Button(
+                            onClick = { launchEsde(true) },
+                            colors = ButtonDefaults.buttonColors(containerColor = DANGER_RED, contentColor = Color.White),
+                        ) { Text("START WITHOUT SYNC") }
                     }
                     EsdeSyncState.STARTING, EsdeSyncState.WAITING_FOR_PRIMARY, EsdeSyncState.RESCANNING,
                     EsdeSyncState.SYNCING, EsdeSyncState.IMPORTING_METADATA -> {
                         OutlinedButton(onClick = ::retry) { Text("RETRY") }
-                        OutlinedButton(onClick = { launchEsde(true) }) { Text("START WITHOUT SYNC") }
+                        Button(
+                            onClick = { launchEsde(true) },
+                            colors = ButtonDefaults.buttonColors(containerColor = DANGER_RED, contentColor = Color.White),
+                        ) { Text("START WITHOUT SYNC") }
                     }
                     else -> Unit
                 }
@@ -500,6 +625,8 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 style = MaterialTheme.typography.labelLarge,
             )
         }
+        conflictFolder?.let { ConflictListDialog(it) }
+        pendingConflictResolution?.let { ConflictConfirmationDialog(it) }
     }
 
     @Composable
@@ -511,32 +638,162 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("WHAT TO DO", color = Color.White, fontWeight = FontWeight.Bold)
                 Text(currentInstruction(), color = Color(0xFFF0F0F0), style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    "1  Start ES-DE here  ·  2  Play and close the emulator  ·  3  Return to ES-DE and press Home  ·  " +
-                        "4  Keep this screen open until SAFE TO SWITCH DEVICE",
-                    color = Color(0xFFAFAFAF),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
+                InstructionStep(1, "Start ES-DE from this screen.")
+                InstructionStep(2, "Play, then close the emulator and return to ES-DE.")
+                InstructionStep(3, "Press Home in ES-DE to return to SafeSync.")
+                InstructionStep(4, "Keep SafeSync open until SAFE TO SWITCH DEVICE appears.")
             }
         }
     }
 
     @Composable
-    private fun FolderCard(health: EsdeFolderHealth) {
-        val healthy = health.state == "idle" && health.needTotalItems == 0L && health.conflicts == 0
+    private fun InstructionStep(number: Int, instruction: String) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
+            Text("$number.", color = SAFE_GREEN, fontWeight = FontWeight.Bold)
+            Text(instruction, color = Color(0xFFAFAFAF), style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+
+    @Composable
+    private fun FolderCard(health: EsdeFolderHealth, onViewConflicts: () -> Unit) {
+        val rawRemotePending = health.remoteNeedItems.coerceAtLeast(
+            if (health.remoteCompletion < 100 || health.remoteNeedBytes > 0.0) 1 else 0,
+        )
+        val remotePending = if (health.remoteNeedKnown) health.remoteBlockingItems else rawRemotePending
+        val healthy = health.state == "idle" && health.needTotalItems == 0L && health.conflicts == 0 &&
+            health.error.isBlank() && health.pullErrors == 0L && remotePending == 0L && health.remoteState == "valid"
         Card(
             modifier = Modifier.fillMaxWidth().focusable(),
             border = BorderStroke(1.dp, if (healthy) Color(0xFF74BF6C) else Color(0xFFD8A657)),
             colors = CardDefaults.cardColors(containerColor = ESDE_PANEL),
         ) {
-            Row(Modifier.fillMaxWidth().padding(18.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(health.label, color = Color.White)
-                    if (health.label != health.id) Text("Folder ID: ${health.id}", color = Color(0xFF858585), style = MaterialTheme.typography.bodySmall)
+            Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(health.label, color = Color.White)
+                        if (health.label != health.id) Text("Folder ID: ${health.id}", color = Color(0xFF858585), style = MaterialTheme.typography.bodySmall)
+                    }
+                    val remaining = health.needTotalItems + remotePending
+                    val label = when {
+                        health.conflicts > 0 -> "⚠ ${health.conflicts} conflict(s)"
+                        health.error.isNotBlank() || health.pullErrors > 0 -> "⚠ Folder error"
+                        healthy -> "✓ Up to date"
+                        else -> "$remaining items remaining"
+                    }
+                    Text(label, color = if (healthy) SAFE_GREEN else Color(0xFFD8A657))
                 }
-                Text(if (healthy) "✓ Up to date" else "${health.needTotalItems} items remaining", color = if (healthy) Color(0xFF74BF6C) else Color(0xFFD8A657))
+                if (health.error.isNotBlank()) Text(health.error, color = Color(0xFFD96B68), style = MaterialTheme.typography.bodySmall)
+                if (health.pullErrors > 0) Text("${health.pullErrors} Syncthing pull error(s)", color = Color(0xFFD96B68), style = MaterialTheme.typography.bodySmall)
+                if (health.remoteIgnoredItems > 0) Text(
+                    "${health.remoteIgnoredItems} intentionally ignored historical item(s) do not block SafeSync.",
+                    color = Color(0xFF9C9C9C),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                if (health.conflictFiles.isNotEmpty()) {
+                    OutlinedButton(onClick = onViewConflicts) { Text("VIEW CONFLICTS") }
+                }
             }
         }
+    }
+
+    @Composable
+    private fun ConflictListDialog(health: EsdeFolderHealth) {
+        AlertDialog(
+            onDismissRequest = { conflictFolder = null },
+            title = { Text("SYNC CONFLICTS") },
+            text = {
+                Column(
+                    Modifier.fillMaxWidth().heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(health.label, fontWeight = FontWeight.Bold)
+                    Text(
+                        "Choose which copy to keep. SafeSync creates private backups before changing any file.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    health.conflictFiles.forEach { relativePath ->
+                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF242424))) {
+                            Column(
+                                Modifier.fillMaxWidth().padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(relativePath, color = Color.White, style = MaterialTheme.typography.bodyMedium)
+                                Text(conflictDescription(relativePath), color = Color(0xFFAAAAAA), style = MaterialTheme.typography.bodySmall)
+                                OutlinedButton(
+                                    onClick = {
+                                        conflictFolder = null
+                                        pendingConflictResolution = PendingConflictResolution(
+                                            health.id,
+                                            relativePath,
+                                            EsdeConflictResolution.KEEP_CURRENT,
+                                        )
+                                    },
+                                ) { Text(if (isGamelistConflict(relativePath)) "KEEP LOCAL GAMELIST" else "KEEP CURRENT") }
+                                if (!isGamelistConflict(relativePath)) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            conflictFolder = null
+                                            pendingConflictResolution = PendingConflictResolution(
+                                                health.id,
+                                                relativePath,
+                                                EsdeConflictResolution.USE_CONFLICT_COPY,
+                                            )
+                                        },
+                                    ) { Text("USE CONFLICT COPY") }
+                                } else {
+                                    Text(
+                                        "gamelist.xml is never merged or replaced. Keep the local file and repair its ignore rule if necessary.",
+                                        color = Color(0xFFD8A657),
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { conflictFolder = null }) { Text("CLOSE") } },
+        )
+    }
+
+    @Composable
+    private fun ConflictConfirmationDialog(pending: PendingConflictResolution) {
+        val useConflict = pending.resolution == EsdeConflictResolution.USE_CONFLICT_COPY
+        AlertDialog(
+            onDismissRequest = { pendingConflictResolution = null },
+            title = { Text("CONFIRM CONFLICT RESOLUTION") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(pending.relativePath)
+                    Text(
+                        if (useConflict) {
+                            "The current file and conflict copy will be backed up. The conflict copy will then replace the current file."
+                        } else {
+                            "The conflict copy will be backed up and removed. The current local file will remain unchanged."
+                        },
+                    )
+                    Text("This action cannot be undone from Syncthing, but its private backup remains available.", fontStyle = FontStyle.Italic)
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { resolveConflict(pending) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (useConflict) DANGER_RED else SAFE_GREEN,
+                        contentColor = if (useConflict) Color.White else Color(0xFF10210E),
+                    ),
+                ) { Text(if (useConflict) "USE CONFLICT COPY" else "KEEP CURRENT") }
+            },
+            dismissButton = { TextButton(onClick = { pendingConflictResolution = null }) { Text("CANCEL") } },
+        )
+    }
+
+    private fun isGamelistConflict(path: String): Boolean =
+        path.substringAfterLast('/').substringAfterLast('\\').startsWith("gamelist.sync-conflict-", ignoreCase = true)
+
+    private fun conflictDescription(path: String): String {
+        val match = CONFLICT_MARKER.find(path) ?: return "Syncthing conflict copy"
+        return "Created ${match.groupValues[1]} ${match.groupValues[2]} · device ${match.groupValues[3]}"
     }
 
     private fun folderDisplayName(folder: Folder): String {
@@ -601,12 +858,22 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     companion object {
         private val ESDE_BACKGROUND = Color(0xFF2B2B2B)
         private val ESDE_PANEL = Color(0xFF151515)
+        private val SAFE_GREEN = Color(0xFF74BF6C)
+        private val DANGER_RED = Color(0xFF9C001E)
+        private val CONFLICT_MARKER = Regex("\\.sync-conflict-(\\d{8})-(\\d{6})-([A-Za-z0-9]+)")
         private const val RETURN_FLUSH_MS = 1000L
         private const val SETTINGS_RETURN_DELAY_MS = 700L
         private const val INITIAL_SCAN_DELAY_MS = 1000L
+        private const val REMOTE_NEED_REFRESH_MS = 5000L
         private const val POLL_MS = 1500L
         private const val SYNC_TIMEOUT_MS = 120_000L
         private const val BOOTSTRAP_DISCOVERY_ATTEMPTS = 4
     }
+
+    private data class PendingConflictResolution(
+        val folderId: String,
+        val relativePath: String,
+        val resolution: EsdeConflictResolution,
+    )
 
 }

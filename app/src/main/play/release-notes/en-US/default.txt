@@ -1,7 +1,5 @@
-Fixes
-- end dangling find process when service stops (#331)
-
-Other
-- chore(syncthing): v2.1.3-rc.3
-- updated wiki
-- updated dependencies
+ES-DE SafeSync
+- Adds guided conflict inspection and safe resolution with private backups.
+- Ignores stale remote gamelist.xml and directory-only entries in the Safe Launch gate.
+- Clarifies the First Setup theme note and Safe Launch instructions.
+- Uses green success actions and a red unsafe-launch action consistently.
