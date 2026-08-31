@@ -76,7 +76,7 @@ restored configuration and continues without generating a new identity.
 ## First setup
 
 1. Migrate and stop the original Syncthing-Fork, or skip migration and stop it.
-2. Start **Syncthing-Fork ES-DE Sync**, grant requested storage/notification
+2. Start **Syncthing ES-DE Safe Sync**, grant requested storage/notification
    access, and add the QNAP as a Syncthing peer.
 3. Connect ROM, save, save-state, and ES-DE data folders and wait for the initial
    sync to finish.
@@ -100,7 +100,7 @@ restored configuration and continues without generating a new identity.
 12. Open the separate **ES-DE Safe Launch** icon or use **Open ES-DE Safe
     Launch** in Gaming Sync settings if the device launcher collapses both app
     icons. In Android's Home picker the Safe Launch entry may be displayed as
-    **Syncthing-Fork ES-DE Sync**; select that entry and wait for **SAFE TO
+    **Syncthing ES-DE Safe Sync**; select that entry and wait for **SAFE TO
     PLAY**.
 13. In Android App info, turn off **Pause app activity if unused**. Android keeps
     this user-controlled and does not let the APK disable it during installation.

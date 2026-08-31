@@ -37,6 +37,25 @@ class EsdeSettingsEditorTest {
         assertTrue(file.readText().contains("name=\"LegacyGamelistFileLocation\""))
     }
 
+    @Test fun supportsEsdeSettingsFragmentsWithMultipleRootElements() {
+        val file = temporary.newFile("es_settings.xml").apply {
+            writeText(
+                """<?xml version="1.0"?>
+                    <string name="ROMDirectory" value="/storage/emulated/0/ROMs" />
+                    <bool name="LegacyGamelistFileLocation" value="false" />
+                    <int name="MaxVRAM" value="512" />
+                """.trimIndent()
+            )
+        }
+
+        val editor = EsdeSettingsEditor()
+        assertTrue(editor.enableLegacyGamelistLocation(file))
+        assertTrue(editor.isLegacyGamelistLocationEnabled(file))
+        assertTrue(file.readText().contains("ROMDirectory"))
+        assertTrue(file.readText().contains("MaxVRAM"))
+        assertEquals(1, Regex("<\\?xml").findAll(file.readText()).count())
+    }
+
     @Test fun rejectsDoctype() {
         val file = temporary.newFile("es_settings.xml").apply {
             writeText("<!DOCTYPE settings [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]><settings/>")

@@ -57,6 +57,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     private var preSyncStarted = false
     private var postSyncStarted = false
     private var legacyConfigurationChecked = false
+    private var bootstrapDiscoveryAttempts = 0
     private var pollStartedAt = 0L
     private val freshFolderStatus = ConcurrentHashMap<String, FolderStatus>()
     private val freshRemoteCompletion = ConcurrentHashMap<String, CompletionInfo>()
@@ -86,14 +87,28 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         if (settings.esdeWasLaunched && settings.launchTimestamp > 0 && !postSyncStarted) {
             postSyncStarted = true
             handler.postDelayed({ beginPostSync() }, RETURN_FLUSH_MS)
+        } else if (!settings.esdeWasLaunched && state == EsdeSyncState.NOT_CONFIGURED && preSyncStarted) {
+            handler.postDelayed({ if (!isFinishing) retry() }, SETTINGS_RETURN_DELAY_MS)
         }
     }
 
     private fun beginPreSync() {
         preSyncStarted = true
-        if (!settings.isSafeLaunchConfigured()) {
+        val missingRequirements = settings.missingSafeLaunchRequirements()
+        if (missingRequirements.isNotEmpty()) {
+            if (
+                missingRequirements == setOf(EsdeSetupRequirement.INITIAL_METADATA_SOURCE) &&
+                bootstrapDiscoveryAttempts < BOOTSTRAP_DISCOVERY_ATTEMPTS
+            ) {
+                bootstrapDiscoveryAttempts++
+                state = EsdeSyncState.STARTING
+                statusDetail = "Checking for synchronized ES-DE metadata…"
+                preSyncStarted = false
+                handler.postDelayed({ if (!isFinishing) beginPreSync() }, POLL_MS)
+                return
+            }
             state = EsdeSyncState.NOT_CONFIGURED
-            statusDetail = "Complete ES-DE Gaming Sync setup first."
+            statusDetail = setupRequirementsMessage(missingRequirements)
             return
         }
         val api = api
@@ -309,8 +324,54 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         preSyncStarted = false
         postSyncStarted = false
         legacyConfigurationChecked = false
+        bootstrapDiscoveryAttempts = 0
         settings.esdeWasLaunched = false
         beginPreSync()
+    }
+
+    private fun initializeFromThisDevice() {
+        val coordinator = service?.esdeSyncCoordinator
+        if (coordinator == null) {
+            state = EsdeSyncState.ERROR
+            statusDetail = "Metadata bridge is not available."
+            return
+        }
+        state = EsdeSyncState.EXPORTING_METADATA
+        statusDetail = "Creating the initial synchronized metadata sidecars…"
+        coordinator.initializeFromThisDevice { result ->
+            when {
+                result.blockedByExistingSidecars -> {
+                    statusDetail = "Existing synchronized metadata was found. It will be imported after synchronization."
+                    retry()
+                }
+                result.export.gamesRead > 0 -> {
+                    statusDetail = "Initial metadata source created: ${result.export.sidecarsWritten} sidecar(s)."
+                    retry()
+                }
+                else -> {
+                    state = EsdeSyncState.NOT_CONFIGURED
+                    statusDetail = "No games were found in the selected gamelist root. Check the directory and gamelist.xml files."
+                }
+            }
+        }
+    }
+
+    private fun setupRequirementsMessage(missing: Set<EsdeSetupRequirement>): String {
+        if (missing == setOf(EsdeSetupRequirement.INITIAL_METADATA_SOURCE)) {
+            return "Choose the initial metadata source. On the first device, select ‘Use this device as initial metadata source’."
+        }
+        val labels = missing.mapNotNull {
+            when (it) {
+                EsdeSetupRequirement.ENABLE_SYNC -> "enable ES-DE Gaming Sync"
+                EsdeSetupRequirement.ESDE_DIRECTORY -> "ES-DE application data directory"
+                EsdeSetupRequirement.GAMELIST_DIRECTORY -> "gamelist root directory"
+                EsdeSetupRequirement.ESDE_APPLICATION -> "ES-DE application"
+                EsdeSetupRequirement.PRIMARY_DEVICE -> "Primary Gaming Sync Device"
+                EsdeSetupRequirement.GAMING_FOLDERS -> "at least one Gaming Sync Folder"
+                EsdeSetupRequirement.INITIAL_METADATA_SOURCE -> null
+            }
+        }
+        return "Setup is incomplete. Missing: ${labels.joinToString()}."
     }
 
     private fun openSettings() {
@@ -329,21 +390,26 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     @Composable
     private fun SafeLaunchScreen() {
         Column(
-            modifier = Modifier.fillMaxSize().background(Color(0xFF10141C)).verticalScroll(rememberScrollState())
+            modifier = Modifier.fillMaxSize().background(Color(0xFF160B0E)).verticalScroll(rememberScrollState())
                 .padding(horizontal = 28.dp, vertical = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text("GAMING SYNC", style = MaterialTheme.typography.headlineLarge, color = Color(0xFFF3EEE9), fontWeight = FontWeight.Bold)
+            Text("SYNCTHING ES-DE SAFE SYNC", style = MaterialTheme.typography.headlineLarge, color = Color(0xFFF3EEE9), fontWeight = FontWeight.Bold)
             Text(stateLabel(state), color = stateColor(state), style = MaterialTheme.typography.titleLarge)
             Text(statusDetail, color = Color(0xFFCAC5C0), style = MaterialTheme.typography.bodyLarge)
             folderHealth.forEach { health -> FolderCard(health) }
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 when (state) {
                     EsdeSyncState.READY_TO_PLAY -> Button(onClick = { launchEsde(false) }) { Text("START ES-DE") }
                     EsdeSyncState.NOT_CONFIGURED -> {
-                        Button(onClick = ::openSettings) { Text("OPEN SETTINGS") }
-                        OutlinedButton(onClick = { launchEsde(true) }) { Text("START WITHOUT SYNC") }
+                        if (settings.missingSafeLaunchRequirements() == setOf(EsdeSetupRequirement.INITIAL_METADATA_SOURCE)) {
+                            Button(onClick = ::initializeFromThisDevice) { Text("USE THIS DEVICE AS INITIAL SOURCE") }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Button(onClick = ::openSettings) { Text("OPEN SETTINGS") }
+                            OutlinedButton(onClick = { launchEsde(true) }) { Text("START WITHOUT SYNC") }
+                        }
                     }
                     EsdeSyncState.SAFE_TO_SWITCH -> {
                         Button(onClick = ::finishSession) { Text("DONE") }
@@ -370,7 +436,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         Card(
             modifier = Modifier.fillMaxWidth().focusable(),
             border = BorderStroke(1.dp, if (healthy) Color(0xFF4CAF78) else Color(0xFFFFC46B)),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1B2330)),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF2A1118)),
         ) {
             Row(Modifier.fillMaxWidth().padding(18.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(health.id, color = Color.White)
@@ -399,6 +465,8 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         private const val POLL_MS = 1_500L
         private const val INITIAL_SCAN_DELAY_MS = 1_500L
         private const val RETURN_FLUSH_MS = 1_000L
+        private const val SETTINGS_RETURN_DELAY_MS = 250L
         private const val SYNC_TIMEOUT_MS = 90_000L
+        private const val BOOTSTRAP_DISCOVERY_ATTEMPTS = 2
     }
 }

@@ -1,4 +1,4 @@
-# Syncthing-Fork - A Syncthing Wrapper for Android
+# Syncthing ES-DE Safe Sync
 
 [![License: MPLv2](https://img.shields.io/badge/License-MPLv2-blue.svg)](https://opensource.org/licenses/MPL-2.0)
 <a href="https://github.com/Realm667/syncthing-android/releases/latest" alt="GitHub release"><img src="https://img.shields.io/github/v/release/Realm667/syncthing-android" /></a>
@@ -50,7 +50,7 @@ pending until a later successful synchronization.
 
 Safe Launch declares Android's Home category, so it can be selected as the Home
 app on handhelds that use ES-DE as their launcher. Some Android builds display
-the package label **Syncthing-Fork ES-DE Sync** in the Home picker and collapse
+the package label **Syncthing ES-DE Safe Sync** in the Home picker and collapse
 the second launcher icon; the Gaming Sync settings therefore include direct
 buttons to open Safe Launch and the system Home-app picker. Android does not allow an app
 to disable its own “Pause app activity if unused” protection silently; the

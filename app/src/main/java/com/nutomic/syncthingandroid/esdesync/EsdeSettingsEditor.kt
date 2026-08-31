@@ -1,9 +1,14 @@
 package com.nutomic.syncthingandroid.esdesync
 
 import org.w3c.dom.Element
+import org.w3c.dom.Node
 import org.xml.sax.SAXException
+import org.xml.sax.InputSource
 import java.io.File
+import java.io.OutputStreamWriter
+import java.io.StringReader
 import javax.xml.XMLConstants
+import org.w3c.dom.Document
 import javax.xml.parsers.DocumentBuilderFactory
 import javax.xml.transform.OutputKeys
 import javax.xml.transform.TransformerFactory
@@ -12,39 +17,33 @@ import javax.xml.transform.stream.StreamResult
 
 class EsdeSettingsEditor {
     fun isLegacyGamelistLocationEnabled(file: File): Boolean {
-        val document = parse(file)
-        return boolElements(document.documentElement)
+        val parsed = parse(file)
+        return boolElements(parsed.container)
             .firstOrNull { it.getAttribute("name") == LEGACY_SETTING }
             ?.getAttribute("value")
             ?.equals("true", ignoreCase = true) == true
     }
 
     fun enableLegacyGamelistLocation(file: File): Boolean {
-        val document = parse(file)
-        val root = document.documentElement ?: throw SAXException("Missing ES-DE settings root")
-        val existing = boolElements(root).firstOrNull { it.getAttribute("name") == LEGACY_SETTING }
+        val parsed = parse(file)
+        val existing = boolElements(parsed.container).firstOrNull { it.getAttribute("name") == LEGACY_SETTING }
         if (existing?.getAttribute("value")?.equals("true", ignoreCase = true) == true) return false
-        val target = existing ?: document.createElement("bool").also {
+        val target = existing ?: parsed.document.createElement("bool").also {
             it.setAttribute("name", LEGACY_SETTING)
-            root.appendChild(it)
+            parsed.container.appendChild(it)
         }
         target.setAttribute("value", "true")
-        AtomicFileWriter.write(file) { output ->
-            val factory = TransformerFactory.newInstance()
-            runCatching { factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true) }
-            factory.newTransformer().apply {
-                setOutputProperty(OutputKeys.ENCODING, "UTF-8")
-                setOutputProperty(OutputKeys.INDENT, "yes")
-                setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "no")
-            }.transform(DOMSource(document), StreamResult(output))
-        }
+        write(file, parsed)
         return true
     }
 
-    private fun parse(file: File) = run {
+    private fun parse(file: File): ParsedSettings {
         require(file.isFile) { "Missing ES-DE settings file: ${file.path}" }
         require(file.length() <= MAX_SETTINGS_BYTES) { "ES-DE settings file is too large" }
         if (containsAsciiIgnoreCase(file, "<!DOCTYPE")) throw SAXException("DOCTYPE is forbidden in es_settings.xml")
+        val source = file.readText(Charsets.UTF_8)
+            .removePrefix("\uFEFF")
+            .replaceFirst(XML_DECLARATION, "")
         val factory = DocumentBuilderFactory.newInstance()
         factory.isNamespaceAware = true
         runCatching { factory.isXIncludeAware = false }
@@ -53,14 +52,50 @@ class EsdeSettingsEditor {
         setFeature(factory, "http://apache.org/xml/features/disallow-doctype-decl", true)
         setFeature(factory, "http://xml.org/sax/features/external-general-entities", false)
         setFeature(factory, "http://xml.org/sax/features/external-parameter-entities", false)
-        factory.newDocumentBuilder().apply {
+        val document = factory.newDocumentBuilder().apply {
             setEntityResolver { _, _ -> throw SAXException("External entities are forbidden") }
-        }.parse(file)
+        }.parse(InputSource(StringReader("<$WRAPPER_TAG>$source</$WRAPPER_TAG>")))
+        val wrapper = document.documentElement ?: throw SAXException("Missing ES-DE settings content")
+        val topLevelElements = (0 until wrapper.childNodes.length)
+            .mapNotNull { wrapper.childNodes.item(it) as? Element }
+        if (topLevelElements.isEmpty()) throw SAXException("Missing ES-DE settings content")
+        val fragment = topLevelElements.size != 1
+        return ParsedSettings(document, if (fragment) wrapper else topLevelElements.single(), fragment)
+    }
+
+    private fun write(file: File, parsed: ParsedSettings) {
+        val factory = TransformerFactory.newInstance()
+        runCatching { factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true) }
+        val transformer = factory.newTransformer().apply {
+            setOutputProperty(OutputKeys.ENCODING, "UTF-8")
+            setOutputProperty(OutputKeys.INDENT, "yes")
+            setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, if (parsed.fragment) "yes" else "no")
+        }
+        AtomicFileWriter.write(file) { output ->
+            if (!parsed.fragment) {
+                transformer.transform(DOMSource(parsed.container), StreamResult(output))
+                return@write
+            }
+            val writer = OutputStreamWriter(output, Charsets.UTF_8)
+            writer.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+            val nodes = parsed.container.childNodes
+            var wroteNode = false
+            for (index in 0 until nodes.length) {
+                val node = nodes.item(index)
+                if (node.nodeType !in SERIALIZED_NODE_TYPES) continue
+                if (wroteNode) writer.append('\n')
+                transformer.transform(DOMSource(node), StreamResult(writer))
+                wroteNode = true
+            }
+            writer.append('\n')
+            writer.flush()
+        }
     }
 
     private fun boolElements(root: Element): List<Element> {
         val nodes = root.getElementsByTagName("bool")
-        return (0 until nodes.length).mapNotNull { nodes.item(it) as? Element }
+        val descendants = (0 until nodes.length).mapNotNull { nodes.item(it) as? Element }
+        return if (root.tagName == "bool") listOf(root) + descendants else descendants
     }
 
     private fun setFeature(factory: DocumentBuilderFactory, name: String, enabled: Boolean) {
@@ -85,5 +120,18 @@ class EsdeSettingsEditor {
     companion object {
         const val LEGACY_SETTING = "LegacyGamelistFileLocation"
         const val MAX_SETTINGS_BYTES = 2L * 1024L * 1024L
+        private const val WRAPPER_TAG = "esde-settings-fragment"
+        private val XML_DECLARATION = Regex("^\\s*<\\?xml[^?]*\\?>", RegexOption.IGNORE_CASE)
+        private val SERIALIZED_NODE_TYPES = setOf(
+            Node.ELEMENT_NODE,
+            Node.COMMENT_NODE,
+            Node.PROCESSING_INSTRUCTION_NODE,
+        )
     }
+
+    private data class ParsedSettings(
+        val document: Document,
+        val container: Element,
+        val fragment: Boolean,
+    )
 }

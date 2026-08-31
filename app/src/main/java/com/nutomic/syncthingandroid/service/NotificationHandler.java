@@ -292,7 +292,7 @@ public class NotificationHandler {
          */
         mNotificationManager.cancel(notificationId);
         Notification n = getNotificationBuilder(mInfoChannel)
-                .setContentTitle(mContext.getString(R.string.app_name))
+                .setContentTitle(mContext.getString(R.string.esde_app_name))
                 .setContentText(text)
                 .setStyle(new NotificationCompat.BigTextStyle()
                         .bigText(text))

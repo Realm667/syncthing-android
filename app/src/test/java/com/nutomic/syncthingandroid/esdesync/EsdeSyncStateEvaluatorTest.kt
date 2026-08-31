@@ -28,6 +28,25 @@ class EsdeSyncStateEvaluatorTest {
         assertEquals(EsdeBootstrapAction.START_OBSERVING, EsdeBootstrapEvaluator.evaluate(true, false))
     }
 
+    @Test fun setupEvaluatorReportsTheExactMissingRequirements() {
+        val missing = EsdeSetupEvaluator.missing(
+            EsdeSetupInput(
+                enabled = true,
+                esdeDirectorySelected = true,
+                gamelistDirectorySelected = true,
+                applicationSelected = true,
+                primaryDeviceSelected = false,
+                gamingFoldersSelected = true,
+                metadataSourceReady = false,
+            )
+        )
+
+        assertEquals(
+            setOf(EsdeSetupRequirement.PRIMARY_DEVICE, EsdeSetupRequirement.INITIAL_METADATA_SOURCE),
+            missing,
+        )
+    }
+
     @Test fun ignoreRuleHonorsSyncthingFirstMatchSemantics() {
         assertEquals(EsdeIgnoreRuleState.MISSING, EsdeIgnoreRules.evaluate(listOf("*.tmp")))
         assertEquals(EsdeIgnoreRuleState.ACTIVE, EsdeIgnoreRules.evaluate(listOf("(?i)gamelist.xml")))

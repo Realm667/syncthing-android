@@ -98,9 +98,22 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
         applicationPackage.isNotBlank() && primaryDeviceId.isNotBlank() &&
         selectedFolderIds.isNotEmpty() && bootstrapComplete
 
-    fun isSafeLaunchConfigured(): Boolean = enabled && esdeDirectory.isNotBlank() && gamelistDirectory.isNotBlank() &&
-        applicationPackage.isNotBlank() && primaryDeviceId.isNotBlank() &&
-        selectedFolderIds.isNotEmpty() && (bootstrapComplete || bootstrapPendingImport)
+    fun missingSafeLaunchRequirements(): Set<EsdeSetupRequirement> = EsdeSetupEvaluator.missing(
+        EsdeSetupInput(
+            enabled = enabled,
+            esdeDirectorySelected = esdeDirectory.isNotBlank(),
+            gamelistDirectorySelected = gamelistDirectory.isNotBlank(),
+            applicationSelected = applicationPackage.isNotBlank(),
+            primaryDeviceSelected = primaryDeviceId.isNotBlank(),
+            gamingFoldersSelected = selectedFolderIds.isNotEmpty(),
+            metadataSourceReady = bootstrapComplete || bootstrapPendingImport,
+        )
+    )
+
+    fun hasCoreSafeLaunchConfiguration(): Boolean =
+        missingSafeLaunchRequirements().all { it == EsdeSetupRequirement.INITIAL_METADATA_SOURCE }
+
+    fun isSafeLaunchConfigured(): Boolean = missingSafeLaunchRequirements().isEmpty()
 
     companion object {
         const val PREF_ENABLED = "esdeSync.enabled"

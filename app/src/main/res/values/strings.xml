@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
 
-    <string name="app_name">Syncthing-Fork ES-DE Sync</string>
-    <string name="esde_app_name" translatable="false">Syncthing-Fork ES-DE Sync</string>
+    <string name="app_name">Syncthing ES-DE Safe Sync</string>
+    <string name="esde_app_name" translatable="false">Syncthing ES-DE Safe Sync</string>
 
     <string name="app_description">An open, trustworthy and decentralized file synchronization application.</string>
     <string name="esde_safe_launch_title">ES-DE Safe Launch</string>
@@ -18,7 +18,7 @@
     <string name="esde_sync_open_safe_launch">Open ES-DE Safe Launch</string>
     <string name="esde_sync_open_safe_launch_summary">Open the synchronization gate even when your launcher hides its second app icon</string>
     <string name="esde_sync_choose_home">Choose Safe Launch as Home app</string>
-    <string name="esde_sync_choose_home_summary">Your device may display it as “Syncthing-Fork ES-DE Sync”; that Home entry opens Safe Launch</string>
+    <string name="esde_sync_choose_home_summary">Your device may display it as “Syncthing ES-DE Safe Sync”; that Home entry opens Safe Launch</string>
     <string name="esde_sync_import_summary">Apply synchronized .esde.json sidecars to the local gamelist.xml files</string>
     <string name="esde_sync_export_summary">Write changed local metadata to per-game .esde.json sidecars</string>
     <string name="esde_sync_unused_app_settings">Android background reliability</string>
@@ -26,9 +26,12 @@
     <string name="esde_sync_application">ES-DE application</string>
     <string name="esde_sync_primary_device">Primary Gaming Sync Device</string>
     <string name="esde_sync_folders">Gaming Sync Folders</string>
+    <string name="esde_sync_folders_summary">Syncthing folders that must be fully synchronized before ES-DE starts, such as ROM, save, media, and metadata folders</string>
     <string name="esde_sync_not_selected">Not selected</string>
     <string name="esde_sync_ignore_check">Check and add gamelist.xml ignore rule</string>
+    <string name="esde_sync_ignore_check_summary">Keep gamelist.xml local on every device and synchronize only the per-game .esde.json sidecars</string>
     <string name="esde_sync_initialize">Use this device as initial metadata source</string>
+    <string name="esde_sync_initialize_summary">One-time first-device action: create the initial .esde.json sidecars from this device without overwriting synchronized sidecars</string>
     <string name="esde_sync_import_now">Import metadata now</string>
     <string name="esde_sync_export_now">Export metadata now</string>
     <string name="esde_sync_diagnostics">ES-DE Sync diagnostics</string>

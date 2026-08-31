@@ -69,6 +69,38 @@ object EsdeBootstrapEvaluator {
     }
 }
 
+enum class EsdeSetupRequirement {
+    ENABLE_SYNC,
+    ESDE_DIRECTORY,
+    GAMELIST_DIRECTORY,
+    ESDE_APPLICATION,
+    PRIMARY_DEVICE,
+    GAMING_FOLDERS,
+    INITIAL_METADATA_SOURCE,
+}
+
+data class EsdeSetupInput(
+    val enabled: Boolean,
+    val esdeDirectorySelected: Boolean,
+    val gamelistDirectorySelected: Boolean,
+    val applicationSelected: Boolean,
+    val primaryDeviceSelected: Boolean,
+    val gamingFoldersSelected: Boolean,
+    val metadataSourceReady: Boolean,
+)
+
+object EsdeSetupEvaluator {
+    fun missing(input: EsdeSetupInput): Set<EsdeSetupRequirement> = buildSet {
+        if (!input.enabled) add(EsdeSetupRequirement.ENABLE_SYNC)
+        if (!input.esdeDirectorySelected) add(EsdeSetupRequirement.ESDE_DIRECTORY)
+        if (!input.gamelistDirectorySelected) add(EsdeSetupRequirement.GAMELIST_DIRECTORY)
+        if (!input.applicationSelected) add(EsdeSetupRequirement.ESDE_APPLICATION)
+        if (!input.primaryDeviceSelected) add(EsdeSetupRequirement.PRIMARY_DEVICE)
+        if (!input.gamingFoldersSelected) add(EsdeSetupRequirement.GAMING_FOLDERS)
+        if (!input.metadataSourceReady) add(EsdeSetupRequirement.INITIAL_METADATA_SOURCE)
+    }
+}
+
 enum class EsdeIgnoreRuleState { ACTIVE, MISSING, CONFLICTING_INCLUDE }
 
 object EsdeIgnoreRules {

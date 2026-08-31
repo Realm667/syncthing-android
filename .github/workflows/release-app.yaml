@@ -103,7 +103,7 @@ jobs:
           fi
 
           {
-            echo "Syncthing-Fork ES-DE Gaming Sync ${{ inputs.tag }}"
+            echo "Syncthing ES-DE Safe Sync ${{ inputs.tag }}"
             echo ""
             echo "Enthaltene Syncthing-Version: ${SYNCTHING_TAG}"
             echo ""
@@ -118,7 +118,7 @@ jobs:
           tag: ${{ inputs.tag }}
           artifacts: './artifacts/*'
           artifactErrorsFailBuild: true
-          name: Syncthing-Fork ES-DE Sync ${{ inputs.tag }}
+          name: Syncthing ES-DE Safe Sync ${{ inputs.tag }}
           bodyFile: ${{ runner.temp }}/release-notes.md
           prerelease: ${{ contains(inputs.syncthingTag, '-') }}
           draft: false

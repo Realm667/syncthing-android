@@ -166,8 +166,9 @@ fun SettingsGamingScreen() {
                 title = { Text(stringResource(R.string.esde_sync_enable_legacy_location)) },
                 summary = { Text(legacySummary) },
                 onClick = {
-                    EsdeLegacyGamelistConfigurator.ensure(context, settings) { _, message ->
-                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                    EsdeLegacyGamelistConfigurator.ensure(context, settings) { success, message ->
+                        val feedback = if (success) "Success: $message" else "Failed: $message"
+                        Toast.makeText(context, feedback, Toast.LENGTH_LONG).show()
                     }
                 },
                 enabled = enabled.value && directory.isNotBlank() && gamelistDirectory.isNotBlank(),
@@ -198,7 +199,12 @@ fun SettingsGamingScreen() {
         item {
             Preference(
                 title = { Text(stringResource(R.string.esde_sync_folders)) },
-                summary = { Text(if (selectedFolders.isEmpty()) stringResource(R.string.esde_sync_not_selected) else "${selectedFolders.size} selected") },
+                summary = {
+                    Column {
+                        Text(if (selectedFolders.isEmpty()) stringResource(R.string.esde_sync_not_selected) else "${selectedFolders.size} selected")
+                        Text(stringResource(R.string.esde_sync_folders_summary))
+                    }
+                },
                 onClick = { showFolders = true },
                 enabled = enabled.value && api != null,
             )
@@ -206,7 +212,7 @@ fun SettingsGamingScreen() {
         item {
             Preference(
                 title = { Text(stringResource(R.string.esde_sync_ignore_check)) },
-                summary = { Text("Append gamelist.xml without replacing existing ignore patterns") },
+                summary = { Text(stringResource(R.string.esde_sync_ignore_check_summary)) },
                 onClick = {
                     if (api != null) {
                         EsdeIgnoreRuleManager(api).ensure(selectedFolders) { result ->
@@ -223,7 +229,7 @@ fun SettingsGamingScreen() {
         item {
             Preference(
                 title = { Text(stringResource(R.string.esde_sync_initialize)) },
-                summary = { Text("Use this device only when no synchronized sidecars exist") },
+                summary = { Text(stringResource(R.string.esde_sync_initialize_summary)) },
                 onClick = {
                     service?.esdeSyncCoordinator?.initializeFromThisDevice { result ->
                         val message = if (result.blockedByExistingSidecars) {

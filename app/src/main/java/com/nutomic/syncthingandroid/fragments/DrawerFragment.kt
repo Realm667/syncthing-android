@@ -380,7 +380,7 @@ private fun DrawerHeader() {
             )
             Spacer(Modifier.width(12.dp))
             Text(
-                text = stringResource(R.string.app_name),
+                text = stringResource(R.string.esde_app_name),
                 style = MaterialTheme.typography.titleLarge,
                 color = MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.SemiBold,
