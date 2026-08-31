@@ -3,6 +3,8 @@ package com.nutomic.syncthingandroid.settings
 import android.app.Activity
 import android.content.ComponentName
 import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -38,6 +40,7 @@ import me.zhanghai.compose.preference.Preference
 import me.zhanghai.compose.preference.SwitchPreference
 import me.zhanghai.compose.preference.rememberPreferenceState
 import java.text.DateFormat
+import java.io.File
 import java.util.Date
 
 fun EntryProviderScope<SettingsRoute>.settingsGamingEntry() {
@@ -58,6 +61,7 @@ fun SettingsGamingScreen() {
     val settings = remember { EsdeSyncSettings(preferences) }
     val enabled = rememberPreferenceState(EsdeSyncSettings.PREF_ENABLED, false)
     var directory by remember { mutableStateOf(settings.esdeDirectory) }
+    var gamelistDirectory by remember { mutableStateOf(settings.gamelistDirectory) }
     var applicationPackage by remember { mutableStateOf(settings.applicationPackage) }
     var primaryDevice by remember { mutableStateOf(settings.primaryDeviceId) }
     var selectedFolders by remember { mutableStateOf(settings.selectedFolderIds) }
@@ -69,6 +73,19 @@ fun SettingsGamingScreen() {
             result.data?.getStringExtra(FolderPickerActivity.EXTRA_RESULT_DIRECTORY)?.let {
                 directory = it
                 settings.esdeDirectory = it
+                if (!settings.hasExplicitGamelistDirectory) {
+                    gamelistDirectory = File(it, "gamelists").path
+                }
+                settings.bootstrapComplete = false
+                settings.bootstrapPendingImport = false
+            }
+        }
+    }
+    val gamelistDirectoryPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            result.data?.getStringExtra(FolderPickerActivity.EXTRA_RESULT_DIRECTORY)?.let {
+                gamelistDirectory = it
+                settings.gamelistDirectory = it
                 settings.bootstrapComplete = false
                 settings.bootstrapPendingImport = false
             }
@@ -112,6 +129,40 @@ fun SettingsGamingScreen() {
                     directoryPicker.launch(FolderPickerActivity.createIntent(context, directory.takeIf { it.isNotBlank() }, null))
                 },
                 enabled = enabled.value,
+            )
+        }
+        item {
+            Preference(
+                title = { Text(stringResource(R.string.esde_sync_gamelist_directory)) },
+                summary = {
+                    Column {
+                        Text(gamelistDirectory.ifBlank { stringResource(R.string.esde_sync_not_selected) })
+                        Text(stringResource(R.string.esde_sync_gamelist_directory_summary))
+                    }
+                },
+                onClick = {
+                    gamelistDirectoryPicker.launch(
+                        FolderPickerActivity.createIntent(
+                            context,
+                            gamelistDirectory.takeIf { it.isNotBlank() },
+                            null,
+                        )
+                    )
+                },
+                enabled = enabled.value,
+            )
+        }
+        item {
+            Preference(
+                title = { Text(stringResource(R.string.esde_sync_enable_legacy_location)) },
+                summary = { Text(stringResource(R.string.esde_sync_enable_legacy_location_summary)) },
+                onClick = {
+                    service?.esdeSyncCoordinator?.ensureLegacyGamelistLocation { _, message ->
+                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                    }
+                },
+                enabled = enabled.value && directory.isNotBlank() && gamelistDirectory.isNotBlank() &&
+                    settings.usesLegacyGamelistLocation() && service?.esdeSyncCoordinator != null,
             )
         }
         item {
@@ -194,6 +245,17 @@ fun SettingsGamingScreen() {
         }
         item {
             Preference(
+                title = { Text(stringResource(R.string.esde_sync_unused_app_settings)) },
+                summary = { Text(stringResource(R.string.esde_sync_unused_app_settings_summary)) },
+                onClick = {
+                    context.startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
+                    )
+                },
+            )
+        }
+        item {
+            Preference(
                 title = { Text(stringResource(R.string.esde_sync_diagnostics)) },
                 onClick = { navigator.navigateTo(SettingsRoute.GamingDiagnostics) },
             )
@@ -261,7 +323,8 @@ fun SettingsGamingDiagnosticsScreen() {
         return if (value == 0L) "Never" else DateFormat.getDateTimeInstance().format(Date(value))
     }
     SettingsScaffold(title = stringResource(R.string.esde_sync_diagnostics)) {
-        item { Preference(title = { Text("ES-DE directory") }, summary = { Text(settings.esdeDirectory.ifBlank { "Not selected" }) }) }
+        item { Preference(title = { Text("ES-DE application data directory") }, summary = { Text(settings.esdeDirectory.ifBlank { "Not selected" }) }) }
+        item { Preference(title = { Text("Gamelist root directory") }, summary = { Text(settings.gamelistDirectory.ifBlank { "Not selected" }) }) }
         item { Preference(title = { Text("Primary peer") }, summary = { Text(settings.primaryDeviceId.ifBlank { "Not selected" }) }) }
         item { Preference(title = { Text("Selected folders") }, summary = { Text(settings.selectedFolderIds.joinToString().ifBlank { "None" }) }) }
         item { Preference(title = { Text("Systems found") }, summary = { Text((diagnostics?.systemsFound ?: 0).toString()) }) }

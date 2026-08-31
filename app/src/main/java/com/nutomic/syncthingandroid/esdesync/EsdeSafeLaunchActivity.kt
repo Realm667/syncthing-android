@@ -56,6 +56,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     private var folderHealth by mutableStateOf<List<EsdeFolderHealth>>(emptyList())
     private var preSyncStarted = false
     private var postSyncStarted = false
+    private var legacyConfigurationChecked = false
     private var pollStartedAt = 0L
     private val freshFolderStatus = ConcurrentHashMap<String, FolderStatus>()
     private val freshRemoteCompletion = ConcurrentHashMap<String, CompletionInfo>()
@@ -99,6 +100,27 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         if (api == null) {
             state = EsdeSyncState.STARTING
             handler.postDelayed({ if (!isFinishing) beginPreSyncRetry() }, POLL_MS)
+            return
+        }
+        if (settings.usesLegacyGamelistLocation() && !legacyConfigurationChecked) {
+            val coordinator = service?.esdeSyncCoordinator
+            if (coordinator == null) {
+                state = EsdeSyncState.ERROR
+                statusDetail = "Metadata bridge is not available."
+                return
+            }
+            state = EsdeSyncState.STARTING
+            statusDetail = "Checking ES-DE ROM gamelist configuration…"
+            coordinator.ensureLegacyGamelistLocation { success, message ->
+                if (!success) {
+                    state = EsdeSyncState.ERROR
+                    statusDetail = message
+                } else {
+                    legacyConfigurationChecked = true
+                    preSyncStarted = false
+                    beginPreSync()
+                }
+            }
             return
         }
         state = EsdeSyncState.RESCANNING
@@ -286,6 +308,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         handler.removeCallbacksAndMessages(null)
         preSyncStarted = false
         postSyncStarted = false
+        legacyConfigurationChecked = false
         settings.esdeWasLaunched = false
         beginPreSync()
     }

@@ -1,6 +1,7 @@
 package com.nutomic.syncthingandroid.esdesync
 
 import android.content.SharedPreferences
+import java.io.File
 import java.util.UUID
 
 class EsdeSyncSettings(private val preferences: SharedPreferences) {
@@ -11,6 +12,21 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
     var esdeDirectory: String
         get() = preferences.getString(PREF_ESDE_DIRECTORY, "") ?: ""
         set(value) { preferences.edit().putString(PREF_ESDE_DIRECTORY, value).apply() }
+
+    var gamelistDirectory: String
+        get() = preferences.getString(PREF_GAMELIST_DIRECTORY, null)
+            ?: esdeDirectory.takeIf { it.isNotBlank() }?.let { File(it, "gamelists").path }.orEmpty()
+        set(value) { preferences.edit().putString(PREF_GAMELIST_DIRECTORY, value).apply() }
+
+    val hasExplicitGamelistDirectory: Boolean
+        get() = preferences.contains(PREF_GAMELIST_DIRECTORY)
+
+    fun usesLegacyGamelistLocation(): Boolean {
+        if (esdeDirectory.isBlank() || gamelistDirectory.isBlank()) return false
+        return runCatching {
+            File(gamelistDirectory).canonicalFile != File(esdeDirectory, "gamelists").canonicalFile
+        }.getOrDefault(true)
+    }
 
     var applicationPackage: String
         get() = preferences.getString(PREF_APPLICATION_PACKAGE, "") ?: ""
@@ -78,17 +94,18 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
             .apply()
     }
 
-    fun isConfigured(): Boolean = enabled && esdeDirectory.isNotBlank() &&
+    fun isConfigured(): Boolean = enabled && esdeDirectory.isNotBlank() && gamelistDirectory.isNotBlank() &&
         applicationPackage.isNotBlank() && primaryDeviceId.isNotBlank() &&
         selectedFolderIds.isNotEmpty() && bootstrapComplete
 
-    fun isSafeLaunchConfigured(): Boolean = enabled && esdeDirectory.isNotBlank() &&
+    fun isSafeLaunchConfigured(): Boolean = enabled && esdeDirectory.isNotBlank() && gamelistDirectory.isNotBlank() &&
         applicationPackage.isNotBlank() && primaryDeviceId.isNotBlank() &&
         selectedFolderIds.isNotEmpty() && (bootstrapComplete || bootstrapPendingImport)
 
     companion object {
         const val PREF_ENABLED = "esdeSync.enabled"
         const val PREF_ESDE_DIRECTORY = "esdeSync.directory"
+        const val PREF_GAMELIST_DIRECTORY = "esdeSync.gamelistDirectory"
         const val PREF_APPLICATION_PACKAGE = "esdeSync.applicationPackage"
         const val PREF_PRIMARY_DEVICE = "esdeSync.primaryDevice"
         const val PREF_GAMING_FOLDERS = "esdeSync.gamingFolders"

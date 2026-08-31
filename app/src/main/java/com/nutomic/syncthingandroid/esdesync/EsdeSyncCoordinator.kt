@@ -38,6 +38,10 @@ class EsdeSyncCoordinator(
                 stopObserver()
                 if (settings.enabled) start()
             }
+            EsdeSyncSettings.PREF_GAMELIST_DIRECTORY -> {
+                stopObserver()
+                if (settings.enabled) start()
+            }
             EsdeSyncSettings.PREF_BOOTSTRAP_COMPLETE -> {
                 if (settings.enabled && settings.bootstrapComplete) startObserver() else stopObserver()
             }
@@ -146,6 +150,28 @@ class EsdeSyncCoordinator(
         }
     }
 
+    fun ensureLegacyGamelistLocation(callback: (Boolean, String) -> Unit = { _, _ -> }) {
+        executor.execute {
+            val result = runCatching {
+                if (!settings.usesLegacyGamelistLocation()) {
+                    return@runCatching "Central ES-DE gamelist location is selected"
+                }
+                val settingsFile = esdeSettingsFile()
+                val backup = File(appContext.filesDir, "esde-sync/backups/settings/es_settings.xml")
+                if (!backup.isFile) {
+                    AtomicFileWriter.write(backup) { output -> settingsFile.inputStream().use { it.copyTo(output) } }
+                }
+                val changed = EsdeSettingsEditor().enableLegacyGamelistLocation(settingsFile)
+                if (changed) "Enabled LegacyGamelistFileLocation in es_settings.xml"
+                else "LegacyGamelistFileLocation is already enabled"
+            }
+            result.onFailure { recordError("Could not configure ES-DE ROM gamelists", it) }
+            mainHandler.post {
+                callback(result.isSuccess, result.getOrElse { it.message ?: "Unknown ES-DE settings error" })
+            }
+        }
+    }
+
     fun diagnostics(): EsdeDiagnostics = diagnostics
 
     fun runDiagnostics(callback: (EsdeDiagnostics) -> Unit = {}) {
@@ -211,22 +237,25 @@ class EsdeSyncCoordinator(
         diagnostics = diagnostics.copy(observerRunning = false)
     }
 
-    private fun systemDirectories(): List<File> = gamelistsDirectory()
-        .listFiles { file -> file.isDirectory &&
-            (File(file, EsdeMetadataBridge.GAMELIST).isFile || File(file, EsdeSidecarStore.SIDECAR_DIRECTORY).isDirectory) }
-        ?.sortedBy { it.name }
-        ?: emptyList()
+    private fun systemDirectories(): List<File> = EsdeGamelistLocator(gamelistsDirectory()).systemDirectories()
 
     private fun sidecarsExist(): Boolean = systemDirectories().any {
         File(it, EsdeSidecarStore.SIDECAR_DIRECTORY).walkTopDown()
             .any { file -> file.isFile && file.name.endsWith(EsdeSidecarStore.SIDECAR_SUFFIX) }
     }
 
-    private fun gamelistsDirectory(): File = File(settings.esdeDirectory, "gamelists")
+    private fun gamelistsDirectory(): File = File(settings.gamelistDirectory)
+
+    private fun esdeSettingsFile(): File {
+        val root = File(settings.esdeDirectory).canonicalFile
+        val file = File(root, "settings/es_settings.xml").canonicalFile
+        val prefix = root.path.trimEnd(File.separatorChar) + File.separator
+        require(file.path.startsWith(prefix)) { "ES-DE settings file escaped its configured root" }
+        return file
+    }
 
     private fun isInsideGamelists(file: File): Boolean = runCatching {
-        val root = gamelistsDirectory().canonicalPath.trimEnd(File.separatorChar) + File.separator
-        file.canonicalPath.startsWith(root)
+        EsdeGamelistLocator(gamelistsDirectory()).contains(file)
     }.getOrDefault(false)
 
     private fun refreshDiagnostics() {

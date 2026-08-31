@@ -81,17 +81,26 @@ restored configuration and continues without generating a new identity.
 3. Connect ROM, save, save-state, and ES-DE data folders and wait for the initial
    sync to finish.
 4. Open **Settings → ES-DE Gaming Sync** and enable the feature.
-5. Select the ES-DE data directory (the directory containing `gamelists`).
-6. Select the installed ES-DE launcher application.
-7. Select the QNAP as **Primary Gaming Sync Device**.
-8. Select only folders that must block launch (typically ROMs, saves, states, and
+5. Select the ES-DE application data directory (the directory containing
+   `settings/es_settings.xml`).
+6. Select the gamelist root. Choose `ES-DE/gamelists` for the central ES-DE
+   layout, or the `ROMs` directory when every system stores
+   `ROMs/<system>/gamelist.xml`. Safe Launch enables
+   `LegacyGamelistFileLocation` for the latter layout and keeps a private backup
+   of the ES-DE settings file.
+7. Select the installed ES-DE launcher application.
+8. Select the QNAP as **Primary Gaming Sync Device**.
+9. Select only folders that must block launch (typically ROMs, saves, states, and
    ES-DE data).
-9. Run **Check and add gamelist.xml ignore rule**. Existing ignore lines are
+10. Run **Check and add gamelist.xml ignore rule**. Existing ignore lines are
    preserved. Confirm `gamelist.xml` is ignored on every participating device.
-10. If synchronized sidecars already exist, let the automatic import finish. If
+11. If synchronized sidecars already exist, let the automatic import finish. If
     none exist anywhere, choose exactly one current device and explicitly press
     **Use this device as initial metadata source**.
-11. Open the separate **ES-DE Safe Launch** icon and wait for **SAFE TO PLAY**.
+12. Open the separate **ES-DE Safe Launch** icon, or select it as Android's Home
+    app, and wait for **SAFE TO PLAY**.
+13. In Android App info, turn off **Pause app activity if unused**. Android keeps
+    this user-controlled and does not let the APK disable it during installation.
 
 ## Safe first test
 

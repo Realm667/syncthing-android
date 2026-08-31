@@ -16,11 +16,14 @@
 
 ## Layout and identity
 
-For `ES-DE/gamelists/snes/gamelist.xml` and game path
-`./RPG/Chrono Trigger.sfc`, synchronized state is stored at:
+For either `ES-DE/gamelists/snes/gamelist.xml` or
+`ROMs/snes/gamelist.xml` and game path `./RPG/Chrono Trigger.sfc`, synchronized
+state is stored beneath that same system directory:
 
 ```text
 ES-DE/gamelists/snes/.esde-sync/RPG/Chrono Trigger.sfc.esde.json
+# or
+ROMs/snes/.esde-sync/RPG/Chrono Trigger.sfc.esde.json
 ```
 
 The stable identity is `snes|./RPG/Chrono Trigger.sfc`. The actual ES-DE path is
@@ -77,11 +80,16 @@ Automatic export is denied until `bootstrapComplete`:
 - No sidecars: the user must explicitly choose **Use this device as initial
   metadata source**. A full export then creates sidecars and enables observation.
 
-Changing the ES-DE directory resets bootstrap authority.
+Changing either the ES-DE application data directory or the configured gamelist
+root resets bootstrap authority. The default gamelist root is
+`<ES-DE data>/gamelists`; users of externally scraped legacy gamelists select
+their `ROMs` root instead. Before Safe Launch uses that layout, the bridge backs
+up `settings/es_settings.xml` privately and atomically enables
+`LegacyGamelistFileLocation` without removing other ES-DE settings.
 
 ## Safe Launch
 
-The second launcher entry persists a session UUID, launch timestamp, whether
+The second launcher entry also declares Android's Home category and persists a session UUID, launch timestamp, whether
 ES-DE was launched, offline override, pending changes, and the previous
 Syncthing force state. It temporarily requests force-start, rescans only selected
 folders, and evaluates one state machine:
@@ -115,5 +123,7 @@ session completion.
 - Completion is conservatively polled through the wrapper's folder status and
   primary-device completion caches. Their cache-miss paths issue REST reads;
   expensive completion queries are intentionally not fired continuously.
+- Android's unused-app protection is controlled only by the user. The app links
+  directly to App info but cannot silently disable the switch during install.
 - Automatic ES-DE process-exit callbacks do not exist on Android. Returning to
   the still-persisted Safe Launch task is the supported post-sync trigger.

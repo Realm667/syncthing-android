@@ -33,6 +33,13 @@ ES-DE normally stores every game's mutable state for a system in one
 file conflicts. The bridge keeps every `gamelist.xml` local and ignored, then
 synchronizes one small `.esde.json` sidecar per game instead.
 
+Both current ES-DE layouts are supported: the central
+`ES-DE/gamelists/<system>/gamelist.xml` tree and the legacy/portable
+`ROMs/<system>/gamelist.xml` layout used by external scrapers. Sidecars always
+live below the same system directory in `.esde-sync`. For the ROM layout, Safe
+Launch verifies and safely enables `LegacyGamelistFileLocation` in ES-DE's
+`settings/es_settings.xml` before starting ES-DE.
+
 Version 1 synchronizes `favorite`, `completed`, `playcount`, `playtime`,
 `lastplayed`, and the exact opaque `altemulator` value. Missing sidecar fields do
 not erase local values. ES-DE Safe Launch checks the selected Syncthing folders
@@ -40,6 +47,12 @@ and primary device before play, imports metadata, starts the chosen ES-DE app,
 then exports and synchronizes changes after return. When the primary device is
 unavailable, **Start without sync** remains available and marks local changes as
 pending until a later successful synchronization.
+
+Safe Launch declares Android's Home category, so it can be selected as the Home
+app on handhelds that use ES-DE as their launcher. Android does not allow an app
+to disable its own “Pause app activity if unused” protection silently; the
+Gaming Sync settings provide a direct link to App info for that user-controlled
+switch.
 
 Read [the architecture](docs/ESDE_SYNC_ARCHITECTURE.md), [implementation plan](docs/ESDE_SYNC_IMPLEMENTATION_PLAN.md),
 and [test APK installation guide](docs/INSTALL_TEST_APK.md) before enabling it.
