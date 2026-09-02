@@ -6,6 +6,15 @@ import java.io.File
 import java.util.UUID
 
 class EsdeSyncSettings(private val preferences: SharedPreferences) {
+    init {
+        // Preserve the user's previous category choices when upgrading from the
+        // version where shared state was implicitly coupled to the ROM folder.
+        if (!preferences.contains(PREF_SHARED_STATE_ENABLED)) {
+            val previouslyEnabled = preferences.getBoolean(PREF_SHARED_COLLECTIONS_ENABLED, false) ||
+                preferences.getBoolean(PREF_SHARED_SETTINGS_ENABLED, false)
+            preferences.edit().putBoolean(PREF_SHARED_STATE_ENABLED, previouslyEnabled).apply()
+        }
+    }
     var enabled: Boolean
         get() = preferences.getBoolean(PREF_ENABLED, false)
         set(value) { preferences.edit().putBoolean(PREF_ENABLED, value).apply() }
@@ -84,6 +93,24 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
     var selectedFolderIds: Set<String>
         get() = preferences.getStringSet(PREF_GAMING_FOLDERS, emptySet())?.toSet() ?: emptySet()
         set(value) { preferences.edit().putStringSet(PREF_GAMING_FOLDERS, value.toSet()).apply() }
+
+    var romFolderId: String
+        get() = preferences.getString(PREF_ROM_FOLDER, "") ?: ""
+        set(value) { preferences.edit().putString(PREF_ROM_FOLDER, value).apply() }
+
+    var sharedStateSyncEnabled: Boolean
+        get() = preferences.getBoolean(PREF_SHARED_STATE_ENABLED, false)
+        set(value) { preferences.edit().putBoolean(PREF_SHARED_STATE_ENABLED, value).apply() }
+
+    var sharedStateFolderId: String
+        get() = preferences.getString(PREF_SHARED_STATE_FOLDER, "") ?: ""
+        set(value) { preferences.edit().putString(PREF_SHARED_STATE_FOLDER, value).apply() }
+
+    fun requiredFolderIds(): Set<String> = buildSet {
+        addAll(selectedFolderIds - sharedStateFolderId)
+        if (romFolderId.isNotBlank()) add(romFolderId)
+        if (sharedStateSyncEnabled && sharedStateFolderId.isNotBlank()) add(sharedStateFolderId)
+    }
 
     var sharedCollectionsEnabled: Boolean
         get() = preferences.getBoolean(PREF_SHARED_COLLECTIONS_ENABLED, false)
@@ -212,6 +239,8 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
             applicationSelected = applicationPackage.isNotBlank(),
             primaryDeviceSelected = primaryDeviceId.isNotBlank(),
             gamingFoldersSelected = selectedFolderIds.isNotEmpty(),
+            romFolderSelected = romFolderId.isNotBlank(),
+            sharedStateFolderReady = !sharedStateSyncEnabled || sharedStateFolderId.isNotBlank(),
             metadataSourceReady = bootstrapComplete || bootstrapPendingImport,
         )
     )
@@ -233,6 +262,9 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
         const val PREF_APPLICATION_PACKAGE = "esdeSync.applicationPackage"
         const val PREF_PRIMARY_DEVICE = "esdeSync.primaryDevice"
         const val PREF_GAMING_FOLDERS = "esdeSync.gamingFolders"
+        const val PREF_ROM_FOLDER = "esdeSync.romFolder"
+        const val PREF_SHARED_STATE_ENABLED = "esdeSync.sharedState.enabled"
+        const val PREF_SHARED_STATE_FOLDER = "esdeSync.sharedState.folder"
         const val PREF_SHARED_COLLECTIONS_ENABLED = "esdeSync.sharedCollections.enabled"
         const val PREF_SHARED_COLLECTION_PREFIX = "esdeSync.sharedCollections.selected."
         const val PREF_SHARED_SETTINGS_ENABLED = "esdeSync.sharedSettings.enabled"

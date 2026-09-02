@@ -6,10 +6,12 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
+import android.provider.Settings
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -63,6 +65,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     private val handler = Handler(android.os.Looper.getMainLooper())
     private val preferences by lazy { PreferenceManager.getDefaultSharedPreferences(this) }
     private val settings by lazy { EsdeSyncSettings(preferences) }
+    private val offlineJournal by lazy { EsdeOfflineJournal(File(filesDir, "esde-sync/offline-journal.json")) }
     private var state by mutableStateOf(EsdeSyncState.STARTING)
     private var statusDetail by mutableStateOf("")
     private var folderHealth by mutableStateOf<List<EsdeFolderHealth>>(emptyList())
@@ -102,6 +105,9 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             settings.beginSession(previous)
             preferences.edit().putInt(Constants.PREF_BTNSTATE_FORCE_START_STOP, Constants.BTNSTATE_FORCE_START).apply()
         }
+        if (settings.pendingLocalChanges && offlineJournal.load() == null) {
+            offlineJournal.migratePending(settings.activeSessionId, settings.requiredFolderIds())
+        }
         val serviceIntent = Intent(this, SyncthingService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(serviceIntent) else startService(serviceIntent)
         setContent { ApplicationTheme { SafeLaunchScreen() } }
@@ -109,7 +115,9 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
 
     override fun onServiceConnected(name: ComponentName, binder: IBinder) {
         super.onServiceConnected(name, binder)
-        if (!preSyncStarted && !settings.esdeWasLaunched) beginPreSync()
+        if (!preSyncStarted && !settings.esdeWasLaunched) {
+            if (offlineJournal.load() != null) beginPendingReconciliation() else beginPreSync()
+        }
     }
 
     override fun onResume() {
@@ -170,7 +178,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         }
         state = EsdeSyncState.RESCANNING
         statusDetail = "Refreshing selected gaming folders…"
-        settings.selectedFolderIds.forEach { api.rescanFolder(it) }
+        activeFolderIds().forEach { api.rescanFolder(it) }
         preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_PRE_SYNC, System.currentTimeMillis()).apply()
         pollStartedAt = System.currentTimeMillis()
         handler.postDelayed(::pollPreSync, INITIAL_SCAN_DELAY_MS)
@@ -223,7 +231,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
 
     private fun refreshFreshGateData(onComplete: () -> Unit) {
         val api = api ?: run { onComplete(); return }
-        val ids = settings.selectedFolderIds
+        val ids = activeFolderIds()
         if (ids.isEmpty()) { onComplete(); return }
         val remaining = AtomicInteger(ids.size * 2)
         fun done() { if (remaining.decrementAndGet() == 0) handler.post(onComplete) }
@@ -277,7 +285,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         if (currentService == null || api == null) return EsdeSyncState.STARTING
         val primary = api.getRemoteDeviceStatus(settings.primaryDeviceId)
         val foldersById = api.folders.associateBy { it.id }
-        folderHealth = settings.selectedFolderIds.map { id ->
+        folderHealth = activeFolderIds().map { id ->
             val folder = foldersById[id]
             if (folder == null) return@map EsdeFolderHealth(
                 id, false, "unknown", "Folder is not configured", 0, 0, 0, 0, 0, 0.0, 0,
@@ -352,7 +360,8 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         postSyncStarted = false
         if (offline) {
             settings.pendingLocalChanges = true
-            state = EsdeSyncState.OFFLINE_OVERRIDE
+            offlineJournal.begin(settings.activeSessionId, settings.requiredFolderIds())
+            state = EsdeSyncState.OFFLINE_PLAYING
         } else {
             state = EsdeSyncState.ESDE_RUNNING
         }
@@ -360,22 +369,26 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     }
 
     private fun beginPostSync() {
+        persistPendingChanges("ES-DE session ended; final synchronization is pending")
         state = EsdeSyncState.EXPORTING_METADATA
         statusDetail = "Closing ES-DE before reading final metadata…"
         val coordinator = service?.esdeSyncCoordinator
         if (coordinator == null) {
             state = EsdeSyncState.ERROR
             statusDetail = "Local changes are waiting for synchronization."
-            settings.pendingLocalChanges = true
+            persistPendingChanges(statusDetail)
+            EsdeDeferredSyncScheduler.schedule(this)
             return
         }
         coordinator.closeEsdeAfterPlay { closed, message ->
             if (!closed) {
                 state = EsdeSyncState.ERROR
                 statusDetail = message
-                settings.pendingLocalChanges = true
+                persistPendingChanges(message)
+                EsdeDeferredSyncScheduler.schedule(this)
             } else {
                 statusDetail = message
+                persistPendingChanges()
                 exportAndSyncAfterPlay(coordinator)
             }
         }
@@ -387,12 +400,23 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             coordinator.publishSharedState { shared ->
                 if (!shared.successful) {
                     state = EsdeSyncState.ERROR
-                    settings.pendingLocalChanges = true
                     statusDetail = shared.errorSummary()
+                    persistPendingChanges(statusDetail)
+                    EsdeDeferredSyncScheduler.schedule(this)
                 } else {
+                    if (offlineJournal.load() != null &&
+                        api?.getRemoteDeviceStatus(settings.primaryDeviceId)?.connected != true
+                    ) {
+                        state = EsdeSyncState.OFFLINE_CHANGES_PENDING
+                        statusDetail = "Offline changes are saved locally. Reconnect to the Primary Sync Device to finish."
+                        offlineJournal.markPending(statusDetail)
+                        EsdeDeferredSyncScheduler.schedule(this)
+                        return@publishSharedState
+                    }
+                    offlineJournal.load()?.let { offlineJournal.markReconciling() }
                     state = EsdeSyncState.SYNCING_AFTER_PLAY
                     statusDetail = "Synchronizing game data after play…"
-                    api?.let { rest -> settings.selectedFolderIds.forEach { rest.rescanFolder(it) } }
+                    api?.let { rest -> activeFolderIds().forEach { rest.rescanFolder(it) } }
                     preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_POST_SYNC, System.currentTimeMillis()).apply()
                     pollStartedAt = System.currentTimeMillis()
                     handler.postDelayed(::pollPostSync, INITIAL_SCAN_DELAY_MS)
@@ -402,13 +426,26 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     }
 
     private fun pollPostSync() {
-        refreshFreshGateData { when (evaluateGate()) {
+        refreshFreshGateData { when (val evaluated = evaluateGate()) {
             EsdeSyncState.READY_TO_PLAY -> {
                 state = EsdeSyncState.SAFE_TO_SWITCH
                 statusDetail = "ES-DE is closed and all changes are synchronized. Safe to switch device."
                 settings.pendingLocalChanges = false
+                offlineJournal.clear()
+                EsdeDeferredSyncScheduler.cancel(this)
                 preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_SUCCESSFUL_SYNC, System.currentTimeMillis()).apply()
                 restoreForceState()
+            }
+            EsdeSyncState.ERROR -> {
+                state = EsdeSyncState.ERROR
+                statusDetail = "Pending changes need attention before synchronization can finish."
+                persistPendingChanges(statusDetail)
+            }
+            EsdeSyncState.WAITING_FOR_PRIMARY -> {
+                state = EsdeSyncState.OFFLINE_CHANGES_PENDING
+                statusDetail = "Offline changes are saved locally. The Primary Sync Device is not reachable yet."
+                persistPendingChanges(statusDetail)
+                EsdeDeferredSyncScheduler.schedule(this)
             }
             else -> {
                 state = EsdeSyncState.SYNCING_AFTER_PLAY
@@ -416,11 +453,31 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                     handler.postDelayed(::pollPostSync, POLL_MS)
                 } else {
                     state = EsdeSyncState.ERROR
-                    settings.pendingLocalChanges = true
                     statusDetail = "Local changes are waiting for synchronization."
+                    persistPendingChanges(statusDetail)
+                    EsdeDeferredSyncScheduler.schedule(this)
                 }
             }
         } }
+    }
+
+    private fun beginPendingReconciliation() {
+        preSyncStarted = true
+        postSyncStarted = true
+        val api = api
+        if (api == null) {
+            state = EsdeSyncState.RECONNECTING
+            statusDetail = "Starting Syncthing to reconnect pending offline changes…"
+            handler.postDelayed({ if (!isFinishing) beginPendingReconciliation() }, POLL_MS)
+            return
+        }
+        state = EsdeSyncState.RECONCILING_OFFLINE_CHANGES
+        statusDetail = "Checking the Primary Sync Device and reconciling pending offline changes…"
+        offlineJournal.markReconciling()
+        activeFolderIds().forEach(api::rescanFolder)
+        preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_POST_SYNC, System.currentTimeMillis()).apply()
+        pollStartedAt = System.currentTimeMillis()
+        handler.postDelayed(::pollPostSync, INITIAL_SCAN_DELAY_MS)
     }
 
     private fun restoreForceState() {
@@ -428,9 +485,24 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         service?.evaluateRunConditions()
     }
 
+    private fun activeFolderIds(): Set<String> = buildSet {
+        addAll(settings.requiredFolderIds())
+        offlineJournal.load()?.folderIds?.let(::addAll)
+    }
+
+    private fun persistPendingChanges(message: String = "") {
+        if (offlineJournal.load() == null) {
+            offlineJournal.begin(settings.activeSessionId.ifBlank { "pending-${System.currentTimeMillis()}" }, activeFolderIds())
+        }
+        offlineJournal.markPending(message)
+        settings.pendingLocalChanges = true
+    }
+
     private fun finishSession() {
         restoreForceState()
         settings.clearSession()
+        offlineJournal.clear()
+        EsdeDeferredSyncScheduler.cancel(this)
         handler.removeCallbacksAndMessages(null)
         preSyncStarted = false
         postSyncStarted = false
@@ -451,6 +523,11 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     }
 
     private fun retry() {
+        if (!settings.esdeWasLaunched && offlineJournal.load() != null) {
+            handler.removeCallbacksAndMessages(null)
+            beginPendingReconciliation()
+            return
+        }
         val retryPostSync = postSyncStarted && settings.launchTimestamp > 0
         handler.removeCallbacksAndMessages(null)
         preSyncStarted = false
@@ -511,6 +588,10 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         startActivity(Intent(this, MainActivity::class.java))
     }
 
+    private fun openNetworkSettings() {
+        startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
+    }
+
     private fun initializeFromThisDevice() {
         val coordinator = service?.esdeSyncCoordinator
         if (coordinator == null) {
@@ -550,6 +631,8 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 EsdeSetupRequirement.ESDE_APPLICATION -> "ES-DE application"
                 EsdeSetupRequirement.PRIMARY_DEVICE -> "Primary Gaming Sync Device"
                 EsdeSetupRequirement.GAMING_FOLDERS -> "at least one Gaming Sync Folder"
+                EsdeSetupRequirement.ROM_FOLDER -> "ROM / gamelist Syncthing folder"
+                EsdeSetupRequirement.SHARED_STATE_FOLDER -> "ES-DE Settings & Collections sync folder"
                 EsdeSetupRequirement.INITIAL_METADATA_SOURCE -> null
             }
         }
@@ -563,7 +646,9 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         conflictExecutor.shutdownNow()
-        if (isFinishing && settings.activeSessionId.isNotBlank()) {
+        if (isFinishing && settings.activeSessionId.isNotBlank() && offlineJournal.load() == null &&
+            (state == EsdeSyncState.SAFE_TO_SWITCH || state == EsdeSyncState.IDLE)
+        ) {
             restoreForceState()
             settings.clearSession()
         }
@@ -572,14 +657,15 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
 
     @Composable
     private fun SafeLaunchScreen() {
+        val hasPendingChanges = offlineJournal.load() != null || settings.pendingLocalChanges
         Column(
-            modifier = Modifier.fillMaxSize().background(ESDE_BACKGROUND).verticalScroll(rememberScrollState())
+            modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).verticalScroll(rememberScrollState())
                 .padding(horizontal = 28.dp, vertical = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Card(
-                colors = CardDefaults.cardColors(containerColor = ESDE_PANEL),
-                border = BorderStroke(1.dp, Color(0xFF444444)),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             ) {
                 Column(Modifier.fillMaxWidth().padding(22.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
@@ -587,25 +673,25 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                         modifier = Modifier.fillMaxWidth(),
                         textAlign = TextAlign.Center,
                         style = MaterialTheme.typography.headlineLarge,
-                        color = Color(0xFFF2F2F2),
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = FontWeight.Bold,
                     )
-                    HorizontalDivider(color = Color(0xFF3C3C3C))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     Text(stateLabel(state), color = stateColor(state), style = MaterialTheme.typography.titleLarge)
-                    Text(statusDetail, color = Color(0xFFCACACA), style = MaterialTheme.typography.bodyLarge)
+                    Text(statusDetail, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
                     LinearProgressIndicator(
                         progress = { sessionProgress() },
                         modifier = Modifier.fillMaxWidth().height(10.dp),
                         color = stateColor(state),
-                        trackColor = Color(0xFF454545),
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant,
                     )
-                    Text(progressLabel(), color = Color(0xFF9C9C9C), style = MaterialTheme.typography.bodySmall)
+                    Text(progressLabel(), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                 }
             }
             InstructionCard()
             folderHealth.forEach { health -> FolderCard(health) { conflictFolder = health } }
             if (conflictFeedback.isNotBlank()) {
-                Text(conflictFeedback, color = Color(0xFFD8A657), style = MaterialTheme.typography.bodyMedium)
+                Text(conflictFeedback, color = warningColor(), style = MaterialTheme.typography.bodyMedium)
             }
             Spacer(Modifier.height(8.dp))
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -623,7 +709,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                             Button(
                                 onClick = { launchEsde(true) },
                                 colors = ButtonDefaults.buttonColors(containerColor = DANGER_RED, contentColor = Color.White),
-                            ) { Text("START WITHOUT SYNC") }
+                            ) { Text("START OFFLINE SESSION") }
                         }
                     }
                     EsdeSyncState.SAFE_TO_SWITCH -> {
@@ -637,13 +723,21 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                         onClick = ::startAgain,
                         colors = ButtonDefaults.buttonColors(containerColor = SAFE_GREEN, contentColor = Color(0xFF10210E)),
                     ) { Text("START NEW SESSION") }
+                    EsdeSyncState.OFFLINE_CHANGES_PENDING -> {
+                        Button(
+                            onClick = ::beginPendingReconciliation,
+                            colors = ButtonDefaults.buttonColors(containerColor = SAFE_GREEN, contentColor = Color(0xFF10210E)),
+                        ) { Text("SYNC PENDING CHANGES") }
+                        OutlinedButton(onClick = ::openNetworkSettings) { Text("OPEN NETWORK SETTINGS") }
+                        OutlinedButton(onClick = ::openSyncthing) { Text("OPEN SYNCTHING") }
+                    }
                     EsdeSyncState.ERROR -> {
                         OutlinedButton(onClick = ::retry) { Text("RETRY") }
                         OutlinedButton(onClick = ::openSyncthing) { Text("OPEN SYNCTHING") }
-                        Button(
-                            onClick = { launchEsde(true) },
-                            colors = ButtonDefaults.buttonColors(containerColor = DANGER_RED, contentColor = Color.White),
-                        ) { Text("START WITHOUT SYNC") }
+                        if (!hasPendingChanges) Button(
+                                onClick = { launchEsde(true) },
+                                colors = ButtonDefaults.buttonColors(containerColor = DANGER_RED, contentColor = Color.White),
+                            ) { Text("START OFFLINE SESSION") }
                     }
                     EsdeSyncState.STARTING, EsdeSyncState.WAITING_FOR_PRIMARY, EsdeSyncState.RESCANNING,
                     EsdeSyncState.SYNCING, EsdeSyncState.IMPORTING_METADATA -> {
@@ -651,7 +745,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                         Button(
                             onClick = { launchEsde(true) },
                             colors = ButtonDefaults.buttonColors(containerColor = DANGER_RED, contentColor = Color.White),
-                        ) { Text("START WITHOUT SYNC") }
+                        ) { Text("START OFFLINE SESSION") }
                     }
                     else -> Unit
                 }
@@ -661,15 +755,15 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             ) {
                 Text(
                     "Local changes will be kept. Fully synchronize this device before continuing on another handheld.",
-                    color = Color(0xFFD8A657),
+                    color = warningColor(),
                 )
             }
-            HorizontalDivider(color = Color(0xFF454545))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Text(
                 "A  SELECT     B  BACK     HOME  RETURN TO SAFE SYNC",
                 modifier = Modifier.fillMaxWidth(),
                 textAlign = TextAlign.Center,
-                color = Color(0xFFB8B8B8),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelLarge,
             )
         }
@@ -680,12 +774,12 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     @Composable
     private fun InstructionCard() {
         Card(
-            colors = CardDefaults.cardColors(containerColor = ESDE_PANEL),
-            border = BorderStroke(2.dp, Color(0xFF9C001E)),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(2.dp, MaterialTheme.colorScheme.primary),
         ) {
             Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("WHAT TO DO", color = Color.White, fontWeight = FontWeight.Bold)
-                Text(currentInstruction(), color = Color(0xFFF0F0F0), style = MaterialTheme.typography.bodyLarge)
+                Text("WHAT TO DO", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+                Text(currentInstruction(), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge)
                 InstructionStep(1, "Start ES-DE from this screen.")
                 InstructionStep(2, "Play, then close the emulator and return to ES-DE.")
                 InstructionStep(3, "Press Home in ES-DE to return; SafeSync then closes ES-DE automatically.")
@@ -698,7 +792,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     private fun InstructionStep(number: Int, instruction: String) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
             Text("$number.", color = SAFE_GREEN, fontWeight = FontWeight.Bold)
-            Text(instruction, color = Color(0xFFAFAFAF), style = MaterialTheme.typography.bodyMedium)
+            Text(instruction, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
         }
     }
 
@@ -712,14 +806,14 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             health.error.isBlank() && health.pullErrors == 0L && remotePending == 0L && health.remoteState == "valid"
         Card(
             modifier = Modifier.fillMaxWidth().focusable(),
-            border = BorderStroke(1.dp, if (healthy) Color(0xFF74BF6C) else Color(0xFFD8A657)),
-            colors = CardDefaults.cardColors(containerColor = ESDE_PANEL),
+            border = BorderStroke(1.dp, if (healthy) stateSafeColor() else warningColor()),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         ) {
             Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(health.label, color = Color.White)
-                        if (health.label != health.id) Text("Folder ID: ${health.id}", color = Color(0xFF858585), style = MaterialTheme.typography.bodySmall)
+                        Text(health.label, color = MaterialTheme.colorScheme.onSurface)
+                        if (health.label != health.id) Text("Folder ID: ${health.id}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                     }
                     val remaining = health.needTotalItems + remotePending
                     val label = when {
@@ -728,13 +822,13 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                         healthy -> "✓ Up to date"
                         else -> "$remaining items remaining"
                     }
-                    Text(label, color = if (healthy) SAFE_GREEN else Color(0xFFD8A657))
+                    Text(label, color = if (healthy) stateSafeColor() else warningColor())
                 }
-                if (health.error.isNotBlank()) Text(health.error, color = Color(0xFFD96B68), style = MaterialTheme.typography.bodySmall)
-                if (health.pullErrors > 0) Text("${health.pullErrors} Syncthing pull error(s)", color = Color(0xFFD96B68), style = MaterialTheme.typography.bodySmall)
+                if (health.error.isNotBlank()) Text(health.error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                if (health.pullErrors > 0) Text("${health.pullErrors} Syncthing pull error(s)", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 if (health.remoteIgnoredItems > 0) Text(
                     "${health.remoteIgnoredItems} intentionally ignored historical item(s) do not block SafeSync.",
-                    color = Color(0xFF9C9C9C),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
                 if (health.conflictFiles.isNotEmpty()) {
@@ -760,13 +854,13 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     health.conflictFiles.forEach { relativePath ->
-                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF242424))) {
+                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                             Column(
                                 Modifier.fillMaxWidth().padding(12.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                Text(relativePath, color = Color.White, style = MaterialTheme.typography.bodyMedium)
-                                Text(conflictDescription(relativePath), color = Color(0xFFAAAAAA), style = MaterialTheme.typography.bodySmall)
+                                Text(relativePath, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                                Text(conflictDescription(relativePath), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                                 OutlinedButton(
                                     onClick = {
                                         conflictFolder = null
@@ -791,7 +885,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                                 } else {
                                     Text(
                                         "gamelist.xml is never merged or replaced. Keep the local file and repair its ignore rule if necessary.",
-                                        color = Color(0xFFD8A657),
+                                        color = warningColor(),
                                         style = MaterialTheme.typography.bodySmall,
                                     )
                                 }
@@ -799,8 +893,8 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                         }
                     }
                     if (health.conflictFiles.size > 1) {
-                        HorizontalDivider(color = Color(0xFF444444))
-                        Text("BATCH ACTIONS", color = Color.White, fontWeight = FontWeight.Bold)
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Text("BATCH ACTIONS", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
                         Text(
                             "Apply one decision to all ${health.conflictFiles.size} conflicts in this folder. All files are validated and backed up before changes begin.",
                             style = MaterialTheme.typography.bodyMedium,
@@ -830,7 +924,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                         if (health.conflictFiles.any(::isGamelistConflict)) {
                             Text(
                                 "Safety exception: local gamelist.xml files are always kept, including in a batch.",
-                                color = Color(0xFFD8A657),
+                                color = warningColor(),
                                 fontStyle = FontStyle.Italic,
                                 style = MaterialTheme.typography.bodySmall,
                             )
@@ -904,8 +998,12 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
 
     private fun currentInstruction(): String = when (state) {
         EsdeSyncState.READY_TO_PLAY -> "Synchronization is complete. Select START ES-DE to begin playing."
-        EsdeSyncState.ESDE_RUNNING, EsdeSyncState.OFFLINE_OVERRIDE ->
+        EsdeSyncState.ESDE_RUNNING, EsdeSyncState.OFFLINE_PLAYING ->
             "After playing, close the emulator, return to ES-DE and press Home. Do not switch devices yet."
+        EsdeSyncState.OFFLINE_CHANGES_PENDING ->
+            "Your changes are safely stored on this device but have not reached the Primary Sync Device. Reconnect and select SYNC PENDING CHANGES."
+        EsdeSyncState.RECONNECTING, EsdeSyncState.RECONCILING_OFFLINE_CHANGES ->
+            "Keep this screen open while SafeSync verifies and reconciles the pending offline session."
         EsdeSyncState.EXPORTING_METADATA, EsdeSyncState.SYNCING_AFTER_PLAY ->
             "Keep this screen open while SafeSync publishes and synchronizes your changes."
         EsdeSyncState.SAFE_TO_SWITCH ->
@@ -919,7 +1017,10 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
 
     private fun progressLabel(): String = when (state) {
         EsdeSyncState.READY_TO_PLAY -> "READY · START ES-DE"
-        EsdeSyncState.ESDE_RUNNING, EsdeSyncState.OFFLINE_OVERRIDE -> "PLAYING · RETURN WITH HOME WHEN FINISHED"
+        EsdeSyncState.ESDE_RUNNING, EsdeSyncState.OFFLINE_PLAYING -> "PLAYING · RETURN WITH HOME WHEN FINISHED"
+        EsdeSyncState.OFFLINE_CHANGES_PENDING -> "SAVED LOCALLY · NOT SAFE TO SWITCH DEVICE"
+        EsdeSyncState.RECONNECTING -> "RECONNECTING · PENDING CHANGES"
+        EsdeSyncState.RECONCILING_OFFLINE_CHANGES -> "VERIFYING · PENDING CHANGES"
         EsdeSyncState.SAFE_TO_SWITCH -> "COMPLETE · SAFE TO SWITCH DEVICE"
         EsdeSyncState.IDLE -> "IDLE · SAFE TO SWITCH DEVICE"
         else -> "${(sessionProgress() * 100).toInt()}% · ${stateLabel(state)}"
@@ -935,7 +1036,10 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             EsdeSyncState.SYNCING -> 0.14f + folderCompletion * 0.26f
             EsdeSyncState.IMPORTING_METADATA -> 0.45f
             EsdeSyncState.READY_TO_PLAY -> 0.5f
-            EsdeSyncState.OFFLINE_OVERRIDE, EsdeSyncState.ESDE_RUNNING -> 0.55f
+            EsdeSyncState.OFFLINE_PLAYING, EsdeSyncState.ESDE_RUNNING -> 0.55f
+            EsdeSyncState.OFFLINE_CHANGES_PENDING -> 0.62f
+            EsdeSyncState.RECONNECTING -> 0.64f
+            EsdeSyncState.RECONCILING_OFFLINE_CHANGES -> 0.72f + folderCompletion * 0.27f
             EsdeSyncState.EXPORTING_METADATA -> 0.68f
             EsdeSyncState.SYNCING_AFTER_PLAY -> 0.72f + folderCompletion * 0.27f
             EsdeSyncState.SAFE_TO_SWITCH -> 1f
@@ -947,6 +1051,10 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         EsdeSyncState.READY_TO_PLAY -> "SAFE TO PLAY"
         EsdeSyncState.SAFE_TO_SWITCH -> "SAFE TO SWITCH DEVICE"
         EsdeSyncState.IDLE -> "IDLE"
+        EsdeSyncState.OFFLINE_PLAYING -> "OFFLINE SESSION"
+        EsdeSyncState.OFFLINE_CHANGES_PENDING -> "OFFLINE CHANGES PENDING"
+        EsdeSyncState.RECONNECTING -> "RECONNECTING"
+        EsdeSyncState.RECONCILING_OFFLINE_CHANGES -> "RECONCILING OFFLINE CHANGES"
         EsdeSyncState.WAITING_FOR_PRIMARY -> "PRIMARY DEVICE UNAVAILABLE"
         EsdeSyncState.ERROR -> "ACTION REQUIRED"
         EsdeSyncState.NOT_CONFIGURED -> "SETUP REQUIRED"
@@ -954,15 +1062,20 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         else -> "SYNCHRONIZING…"
     }
 
+    @Composable
     private fun stateColor(value: EsdeSyncState): Color = when (value) {
-        EsdeSyncState.READY_TO_PLAY, EsdeSyncState.SAFE_TO_SWITCH, EsdeSyncState.IDLE -> Color(0xFF74BF6C)
-        EsdeSyncState.ERROR -> Color(0xFFD96B68)
-        else -> Color(0xFFD8A657)
+        EsdeSyncState.READY_TO_PLAY, EsdeSyncState.SAFE_TO_SWITCH, EsdeSyncState.IDLE -> stateSafeColor()
+        EsdeSyncState.ERROR -> MaterialTheme.colorScheme.error
+        else -> warningColor()
     }
 
+    @Composable
+    private fun stateSafeColor(): Color = if (isSystemInDarkTheme()) SAFE_GREEN else Color(0xFF397437)
+
+    @Composable
+    private fun warningColor(): Color = if (isSystemInDarkTheme()) Color(0xFFD8A657) else Color(0xFF795300)
+
     companion object {
-        private val ESDE_BACKGROUND = Color(0xFF2B2B2B)
-        private val ESDE_PANEL = Color(0xFF151515)
         private val SAFE_GREEN = Color(0xFF74BF6C)
         private val DANGER_RED = Color(0xFF9C001E)
         private val CONFLICT_MARKER = Regex("\\.sync-conflict-(\\d{8})-(\\d{6})-([A-Za-z0-9]+)")

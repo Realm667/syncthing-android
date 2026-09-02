@@ -2,6 +2,7 @@ package com.nutomic.syncthingandroid.settings
 
 import android.widget.Toast
 import androidx.compose.material3.Text
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -10,7 +11,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -40,11 +40,13 @@ fun SettingsGamingSharedStateScreen() {
     }
     val collectionsEnabled = rememberPreferenceState(EsdeSyncSettings.PREF_SHARED_COLLECTIONS_ENABLED, false)
     val sharedSettingsEnabled = rememberPreferenceState(EsdeSyncSettings.PREF_SHARED_SETTINGS_ENABLED, false)
+    val sharedStateEnabled = rememberPreferenceState(EsdeSyncSettings.PREF_SHARED_STATE_ENABLED, false)
     var collections by remember { mutableStateOf<Set<String>>(emptySet()) }
     var feedback by remember { mutableStateOf(preferences.getString(EsdeSyncSettings.PREF_LAST_SHARED_STATUS, "Never") ?: "Never") }
 
-    LaunchedEffect(service, settings.gamelistDirectory, settings.esdeDirectory) {
-        service?.esdeSyncCoordinator?.discoverSharedCollections { collections = it }
+    LaunchedEffect(service, settings.sharedStateFolderId, settings.esdeDirectory, sharedStateEnabled.value) {
+        if (sharedStateEnabled.value) service?.esdeSyncCoordinator?.discoverSharedCollections { collections = it }
+        else collections = emptySet()
     }
 
     fun show(message: String) {
@@ -58,14 +60,21 @@ fun SettingsGamingSharedStateScreen() {
 
     SettingsScaffold(
         title = "Shared Collections & ES-DE Settings",
-        description = "Global shared state: <gamelist root>/${EsdeGlobalLayout.DIRECTORY}/. gamelist.xml is never included.",
+        description = "Optional shared state: <Settings & Collections sync folder>/${EsdeGlobalLayout.DIRECTORY}/. ROMs, saves and gamelist.xml are never included.",
     ) {
+        item {
+            Preference(
+                title = { Text("What is synchronized here") },
+                summary = { Text("This page controls only the separate ES-DE Settings & Collections folder. Turning it off does not affect ROMs, saves or per-game metadata.") },
+            )
+        }
         item { SharedSectionHeading("Collections") }
         item {
             SwitchPreference(
                 title = { Text("Shared Collections") },
                 summary = { Text("Opt-in synchronization of validated .xcc filter definitions. Missing shared files never delete local collections.") },
                 state = collectionsEnabled,
+                enabled = sharedStateEnabled.value,
             )
         }
         item {
@@ -79,14 +88,14 @@ fun SettingsGamingSharedStateScreen() {
         } else collections.forEach { name ->
             item {
                 val state = rememberPreferenceState(EsdeSyncSettings.PREF_SHARED_COLLECTION_PREFIX + name, false)
-                SwitchPreference(title = { Text(name) }, state = state, enabled = collectionsEnabled.value)
+                SwitchPreference(title = { Text(name) }, state = state, enabled = sharedStateEnabled.value && collectionsEnabled.value)
             }
         }
         item {
             Preference(
                 title = { Text("Publish shared collections") },
                 summary = { Text("Last published: ${timestamp(EsdeSyncSettings.PREF_LAST_COLLECTION_PUBLISH)}") },
-                enabled = collectionsEnabled.value && settings.sharedCollectionNames.isNotEmpty() && service?.esdeSyncCoordinator != null,
+                enabled = sharedStateEnabled.value && collectionsEnabled.value && settings.sharedCollectionNames.isNotEmpty() && service?.esdeSyncCoordinator != null,
                 onClick = { service?.esdeSyncCoordinator?.publishSharedCollections { show(it.summary("Collections publish")) } },
             )
         }
@@ -95,7 +104,7 @@ fun SettingsGamingSharedStateScreen() {
             Preference(
                 title = { Text("Import shared collections now") },
                 summary = { Text("Last imported: ${timestamp(EsdeSyncSettings.PREF_LAST_COLLECTION_IMPORT)}") },
-                enabled = collectionsEnabled.value && settings.sharedCollectionNames.isNotEmpty() && service?.esdeSyncCoordinator != null,
+                enabled = sharedStateEnabled.value && collectionsEnabled.value && settings.sharedCollectionNames.isNotEmpty() && service?.esdeSyncCoordinator != null,
                 onClick = { service?.esdeSyncCoordinator?.importSharedCollections { show(it.summary("Collections import")) } },
             )
         }
@@ -104,6 +113,7 @@ fun SettingsGamingSharedStateScreen() {
                 title = { Text("Shared ES-DE Settings") },
                 summary = { Text("Enables category-based synchronization of explicitly allowlisted values. Secrets and device-specific paths are never included.") },
                 state = sharedSettingsEnabled,
+                enabled = sharedStateEnabled.value,
             )
         }
         item {
@@ -138,7 +148,7 @@ fun SettingsGamingSharedStateScreen() {
                     title = { Text(category.title) },
                     summary = { Text(category.summary) },
                     state = state,
-                    enabled = sharedSettingsEnabled.value,
+                    enabled = sharedStateEnabled.value && sharedSettingsEnabled.value,
                 )
             }
         }
@@ -152,7 +162,7 @@ fun SettingsGamingSharedStateScreen() {
                             "Do not use this first on a newly installed receiving device. Last published: ${timestamp(EsdeSyncSettings.PREF_LAST_SETTINGS_PUBLISH)}",
                     )
                 },
-                enabled = sharedSettingsEnabled.value && settings.sharedSettingNames.isNotEmpty() && service?.esdeSyncCoordinator != null,
+                enabled = sharedStateEnabled.value && sharedSettingsEnabled.value && settings.sharedSettingNames.isNotEmpty() && service?.esdeSyncCoordinator != null,
                 onClick = { service?.esdeSyncCoordinator?.publishSharedSettings { show(it.summary("Settings publish")) } },
             )
         }
@@ -160,7 +170,7 @@ fun SettingsGamingSharedStateScreen() {
             Preference(
                 title = { Text("Import shared ES-DE settings now") },
                 summary = { Text("Recommended first action on a new device. Last imported: ${timestamp(EsdeSyncSettings.PREF_LAST_SETTINGS_IMPORT)}") },
-                enabled = sharedSettingsEnabled.value && settings.sharedSettingNames.isNotEmpty() && service?.esdeSyncCoordinator != null,
+                enabled = sharedStateEnabled.value && sharedSettingsEnabled.value && settings.sharedSettingNames.isNotEmpty() && service?.esdeSyncCoordinator != null,
                 onClick = { service?.esdeSyncCoordinator?.importSharedSettings { show(it.summary("Settings import")) } },
             )
         }
@@ -184,7 +194,7 @@ private fun SharedSectionHeading(title: String) {
     Text(
         title.uppercase(),
         modifier = Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 4.dp),
-        color = Color(0xFF9C001E),
+        color = MaterialTheme.colorScheme.primary,
         fontWeight = FontWeight.Bold,
     )
 }

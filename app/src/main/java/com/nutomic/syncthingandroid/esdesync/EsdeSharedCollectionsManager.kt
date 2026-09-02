@@ -3,17 +3,17 @@ package com.nutomic.syncthingandroid.esdesync
 import java.io.File
 
 internal class EsdeSharedCollectionsManager(
-    gamelistRoot: File,
+    sharedStateSyncRoot: File,
     private val esdeRoot: File,
     private val snapshots: EsdeSharedSnapshotStore,
     private val backups: EsdePrivateFileBackup,
     private val codec: EsdeCollectionCodec = EsdeCollectionCodec(),
 ) {
-    private val sharedRoot = File(File(gamelistRoot, EsdeGlobalLayout.DIRECTORY), EsdeGlobalLayout.COLLECTIONS_DIRECTORY)
+    private val sharedRoot = File(File(sharedStateSyncRoot, EsdeGlobalLayout.DIRECTORY), EsdeGlobalLayout.COLLECTIONS_DIRECTORY)
     private val localRoot = File(esdeRoot, "collections")
 
     init {
-        requireRootContains(gamelistRoot, sharedRoot)
+        requireRootContains(sharedStateSyncRoot, sharedRoot)
         requireRootContains(esdeRoot, localRoot)
     }
 
@@ -48,6 +48,7 @@ internal class EsdeSharedCollectionsManager(
     private fun transfer(selected: Set<String>, importing: Boolean): EsdeSharedOperationResult {
         val conflicts = mutableListOf<String>()
         val errors = mutableListOf<String>()
+        val warnings = mutableListOf<String>()
         var applied = 0
         var skipped = 0
         val sourceRoot = if (importing) sharedRoot else localRoot
@@ -60,6 +61,11 @@ internal class EsdeSharedCollectionsManager(
             try {
                 codec.validateName(requestedName)
                 val source = File(sourceRoot, "$requestedName.${EsdeCollectionCodec.EXTENSION}")
+                if (!source.isFile) {
+                    skipped++
+                    warnings += "$requestedName is not present on ${if (importing) "the synchronized source" else "this device"} and was left unchanged"
+                    return@forEach
+                }
                 val sourceDefinition = codec.read(source)
                 val target = File(targetRoot, source.name)
                 requireInside(sourceRoot, source)
@@ -90,7 +96,14 @@ internal class EsdeSharedCollectionsManager(
                 errors += "$requestedName (${error.message ?: "invalid"})"
             }
         }
-        return EsdeSharedOperationResult(selected.size, applied, skipped, conflicts.distinct(), errors.distinct())
+        return EsdeSharedOperationResult(
+            selected.size,
+            applied,
+            skipped,
+            conflicts.distinct(),
+            errors.distinct(),
+            warnings.distinct(),
+        )
     }
 
     private fun requireInside(root: File, child: File) {

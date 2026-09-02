@@ -1,6 +1,7 @@
-ES-DE SafeSync
-- Fixes disabled Primary Device and Gaming Folder choices in First Setup.
-- Returns from Android's Home-app picker to the exact First Setup step.
-- Separates DONE (idle) from START NEW SESSION and confirms ES-DE has closed.
-- Prevents Shared Collections and Shared Settings from competing for collection ownership.
-- Repairs Master / Roms protection for gamelist.xml and synchronized global state.
+ES-DE SafeSync 2.1.4.11
+- Adds durable offline sessions, reconnect reminders and verified deferred synchronization.
+- Separates ROMs/saves from the optional ES-DE Settings & Collections sync folder.
+- Assigns the ROM/gamelist folder by stable Syncthing ID and protects gamelist.xml only there.
+- Adds validated, backed-up migration for legacy shared state.
+- Treats collections missing on one device as warnings instead of launch-blocking errors.
+- Improves Safe Launch, First Setup, diagnostics, conflict batches and light-theme contrast.

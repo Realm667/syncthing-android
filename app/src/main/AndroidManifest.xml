@@ -221,6 +221,11 @@
             android:label="SyncTriggerJobService"
             android:permission="android.permission.BIND_JOB_SERVICE" >
        </service>
+        <service
+            android:name=".esdesync.EsdeDeferredSyncJobService"
+            android:label="ES-DE deferred synchronization"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
         <receiver
             android:name=".receiver.BootReceiver"
             android:exported="false">

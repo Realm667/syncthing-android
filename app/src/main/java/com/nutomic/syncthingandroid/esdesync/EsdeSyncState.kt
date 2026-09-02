@@ -10,7 +10,10 @@ enum class EsdeSyncState {
     SYNCING,
     IMPORTING_METADATA,
     READY_TO_PLAY,
-    OFFLINE_OVERRIDE,
+    OFFLINE_PLAYING,
+    OFFLINE_CHANGES_PENDING,
+    RECONNECTING,
+    RECONCILING_OFFLINE_CHANGES,
     ESDE_RUNNING,
     EXPORTING_METADATA,
     SYNCING_AFTER_PLAY,
@@ -105,6 +108,8 @@ enum class EsdeSetupRequirement {
     ESDE_APPLICATION,
     PRIMARY_DEVICE,
     GAMING_FOLDERS,
+    ROM_FOLDER,
+    SHARED_STATE_FOLDER,
     INITIAL_METADATA_SOURCE,
 }
 
@@ -115,6 +120,8 @@ data class EsdeSetupInput(
     val applicationSelected: Boolean,
     val primaryDeviceSelected: Boolean,
     val gamingFoldersSelected: Boolean,
+    val romFolderSelected: Boolean,
+    val sharedStateFolderReady: Boolean,
     val metadataSourceReady: Boolean,
 )
 
@@ -126,6 +133,8 @@ object EsdeSetupEvaluator {
         if (!input.applicationSelected) add(EsdeSetupRequirement.ESDE_APPLICATION)
         if (!input.primaryDeviceSelected) add(EsdeSetupRequirement.PRIMARY_DEVICE)
         if (!input.gamingFoldersSelected) add(EsdeSetupRequirement.GAMING_FOLDERS)
+        if (!input.romFolderSelected) add(EsdeSetupRequirement.ROM_FOLDER)
+        if (!input.sharedStateFolderReady) add(EsdeSetupRequirement.SHARED_STATE_FOLDER)
         if (!input.metadataSourceReady) add(EsdeSetupRequirement.INITIAL_METADATA_SOURCE)
     }
 }
@@ -145,29 +154,23 @@ object EsdeFirstSetupPolicy {
 
 enum class EsdeIgnoreRuleState { ACTIVE, MISSING, CONFLICTING_INCLUDE }
 
-object EsdeIgnoreRules {
+object EsdeRomIgnoreRules {
     fun evaluate(lines: Collection<String>): EsdeIgnoreRuleState {
-        val normalized = lines.map(::normalize)
+        val normalized = lines.mapNotNull(::normalizeEffective)
         if (normalized.any { (included, pattern) -> included && pattern in GAMELIST_PATTERNS }) {
             return EsdeIgnoreRuleState.CONFLICTING_INCLUDE
         }
-        if (normalized.none { (included, pattern) -> !included && pattern in GAMELIST_PATTERNS }) {
-            return EsdeIgnoreRuleState.MISSING
-        }
-        val terminalIgnore = normalized.indexOfFirst { (included, pattern) -> !included && pattern == "*" }
-            .takeIf { it >= 0 } ?: Int.MAX_VALUE
-        val globalIncludesProtected = GLOBAL_INCLUDE_PATTERNS.all { required ->
-            val index = normalized.indexOfFirst { (included, pattern) -> included && pattern == required }
-            index >= 0 && index < terminalIgnore
-        }
-        return if (globalIncludesProtected) EsdeIgnoreRuleState.ACTIVE else EsdeIgnoreRuleState.MISSING
+        val first = normalized.firstOrNull() ?: return EsdeIgnoreRuleState.MISSING
+        return if (!first.first && first.second in GAMELIST_PATTERNS) {
+            EsdeIgnoreRuleState.ACTIVE
+        } else EsdeIgnoreRuleState.MISSING
     }
 
     fun placeIgnoreRuleFirst(lines: Collection<String>): List<String> = buildList {
-        addAll(REQUIRED_RULES)
+        add(IGNORE_RULE)
         addAll(lines.filterNot { raw ->
             val (included, pattern) = normalize(raw)
-            (!included && pattern in GAMELIST_PATTERNS) || (included && pattern in GLOBAL_INCLUDE_PATTERNS)
+            (!included && pattern in GAMELIST_PATTERNS) || (included && pattern in EsdeSharedStateIgnoreRules.INCLUDE_PATTERNS)
         })
     }
 
@@ -179,14 +182,48 @@ object EsdeIgnoreRules {
         return included to line
     }
 
+    private fun normalizeEffective(raw: String): Pair<Boolean, String>? {
+        val trimmed = raw.trim()
+        if (trimmed.isBlank() || trimmed.startsWith("#")) return null
+        return normalize(trimmed)
+    }
+
     private val GAMELIST_PATTERNS = setOf("gamelist.xml", "**/gamelist.xml")
-    private val GLOBAL_INCLUDE_PATTERNS = listOf(
+    const val IGNORE_RULE = "gamelist.xml"
+}
+
+object EsdeSharedStateIgnoreRules {
+    internal val INCLUDE_PATTERNS = listOf(
         "/.esde-sync-global",
         "/.esde-sync-global/**",
-        "/.esde-sync-global/collections",
-        "/.esde-sync-global/collections/*.xcc",
-        "/.esde-sync-global/settings",
-        "/.esde-sync-global/settings/shared-settings.json",
     )
-    internal val REQUIRED_RULES = listOf("gamelist.xml") + GLOBAL_INCLUDE_PATTERNS.map { "!$it" }
+    internal val REQUIRED_RULES = INCLUDE_PATTERNS.map { "!$it" }
+
+    fun evaluate(lines: Collection<String>): EsdeIgnoreRuleState {
+        val normalized = lines.mapNotNull(::normalizeEffective)
+        val valid = normalized.take(INCLUDE_PATTERNS.size) == INCLUDE_PATTERNS.map { true to it }
+        return if (valid) EsdeIgnoreRuleState.ACTIVE else EsdeIgnoreRuleState.MISSING
+    }
+
+    fun placeRulesFirst(lines: Collection<String>): List<String> = buildList {
+        addAll(REQUIRED_RULES)
+        addAll(lines.filterNot { raw ->
+            val (included, pattern) = normalize(raw)
+            included && pattern in INCLUDE_PATTERNS
+        })
+    }
+
+    private fun normalize(raw: String): Pair<Boolean, String> {
+        var line = raw.trim()
+        while (line.startsWith("(?i)") || line.startsWith("(?d)")) line = line.drop(4)
+        val included = line.startsWith('!')
+        if (included) line = line.drop(1)
+        return included to line
+    }
+
+    private fun normalizeEffective(raw: String): Pair<Boolean, String>? {
+        val trimmed = raw.trim()
+        if (trimmed.isBlank() || trimmed.startsWith("#")) return null
+        return normalize(trimmed)
+    }
 }

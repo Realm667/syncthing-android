@@ -7,21 +7,21 @@ import java.io.OutputStreamWriter
 import java.nio.charset.StandardCharsets
 
 internal class EsdeSharedSettingsManager(
-    gamelistRoot: File,
+    sharedStateSyncRoot: File,
     private val esdeRoot: File,
     private val snapshots: EsdeSharedSnapshotStore,
     private val backups: EsdePrivateFileBackup,
     private val gson: Gson = Gson(),
 ) {
     private val sharedFile = File(
-        File(File(gamelistRoot, EsdeGlobalLayout.DIRECTORY), EsdeGlobalLayout.SETTINGS_DIRECTORY),
+        File(File(sharedStateSyncRoot, EsdeGlobalLayout.DIRECTORY), EsdeGlobalLayout.SETTINGS_DIRECTORY),
         EsdeGlobalLayout.SETTINGS_FILE,
     )
     private val settingsFile = File(File(esdeRoot, "settings"), "es_settings.xml")
     private val editor = EsdeSettingsEditor()
 
     init {
-        requireInside(gamelistRoot, sharedFile)
+        requireInside(sharedStateSyncRoot, sharedFile)
         requireInside(esdeRoot, settingsFile)
     }
 

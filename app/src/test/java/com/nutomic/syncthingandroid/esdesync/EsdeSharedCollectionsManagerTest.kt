@@ -46,6 +46,21 @@ class EsdeSharedCollectionsManagerTest {
         assertTrue(localFile.readText().contains("4 STARS"))
     }
 
+    @Test fun missingSelectedCollectionIsAWarningAndDoesNotBlockImport() {
+        val sharedRoot = temporary.newFolder("shared-missing")
+        val esde = temporary.newFolder("ES-DE-missing")
+        val settings = File(File(esde, "settings").apply { mkdirs() }, "es_settings.xml").apply {
+            writeText("<settings />")
+        }
+
+        val result = manager(sharedRoot, esde).importSelected(setOf("Not Installed Here"), settings)
+
+        assertTrue(result.successful)
+        assertEquals(1, result.skipped)
+        assertEquals(1, result.warnings.size)
+        assertTrue(result.errors.isEmpty())
+    }
+
     private fun manager(gamelists: File, esde: File) = EsdeSharedCollectionsManager(
         gamelists, esde,
         EsdeSharedSnapshotStore(temporary.newFolder("snapshots-${System.nanoTime()}")),

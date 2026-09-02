@@ -143,7 +143,9 @@ class EsdeSyncCoordinator(
 
     fun discoverSharedCollections(callback: (Set<String>) -> Unit) {
         executor.execute {
-            val names = runCatching { collectionsManager().discover() }.getOrDefault(emptySet())
+            val names = if (settings.sharedStateSyncEnabled) {
+                runCatching { collectionsManager().discover() }.getOrDefault(emptySet())
+            } else emptySet()
             mainHandler.post { callback(names) }
         }
     }
@@ -181,16 +183,16 @@ class EsdeSyncCoordinator(
         executor.execute {
             val result = runCatching {
                 requireEsdeStopped()
-                val collections = if (settings.sharedCollectionsEnabled) {
+                val collections = if (settings.sharedStateSyncEnabled && settings.sharedCollectionsEnabled) {
                     collectionsManager().importSelected(settings.sharedCollectionNames, esdeSettingsFile())
                 } else EsdeSharedOperationResult()
-                val sharedSettings = if (settings.sharedSettingsEnabled) {
+                val sharedSettings = if (settings.sharedStateSyncEnabled && settings.sharedSettingsEnabled) {
                     settingsManager().importSelected(settings.sharedSettingNames)
                 } else EsdeSharedOperationResult()
-                if (settings.sharedCollectionsEnabled) recordSharedResult(
+                if (settings.sharedStateSyncEnabled && settings.sharedCollectionsEnabled) recordSharedResult(
                     EsdeSyncSettings.PREF_LAST_COLLECTION_IMPORT, collections,
                 )
-                if (settings.sharedSettingsEnabled) recordSharedResult(
+                if (settings.sharedStateSyncEnabled && settings.sharedSettingsEnabled) recordSharedResult(
                     EsdeSyncSettings.PREF_LAST_SETTINGS_IMPORT, sharedSettings,
                 )
                 EsdeGlobalImportResult(collections, sharedSettings)
@@ -204,17 +206,17 @@ class EsdeSyncCoordinator(
 
     fun publishSharedState(callback: (EsdeGlobalImportResult) -> Unit = {}) {
         executor.execute {
-            val collections = if (settings.sharedCollectionsEnabled) {
+            val collections = if (settings.sharedStateSyncEnabled && settings.sharedCollectionsEnabled) {
                 runCatching { collectionsManager().publish(settings.sharedCollectionNames) }
                     .getOrElse { EsdeSharedOperationResult(errors = listOf(it.message ?: "Publish failed")) }
             } else EsdeSharedOperationResult()
-            val sharedSettings = if (settings.sharedSettingsEnabled) {
+            val sharedSettings = if (settings.sharedStateSyncEnabled && settings.sharedSettingsEnabled) {
                 // Safe Launch must never seed a missing profile from a newly installed device's defaults.
                 runCatching { settingsManager().publish(settings.sharedSettingNames, allowInitialize = false) }
                     .getOrElse { EsdeSharedOperationResult(errors = listOf(it.message ?: "Publish failed")) }
             } else EsdeSharedOperationResult()
-            if (settings.sharedCollectionsEnabled) recordSharedResult(EsdeSyncSettings.PREF_LAST_COLLECTION_PUBLISH, collections)
-            if (settings.sharedSettingsEnabled) recordSharedResult(EsdeSyncSettings.PREF_LAST_SETTINGS_PUBLISH, sharedSettings)
+            if (settings.sharedStateSyncEnabled && settings.sharedCollectionsEnabled) recordSharedResult(EsdeSyncSettings.PREF_LAST_COLLECTION_PUBLISH, collections)
+            if (settings.sharedStateSyncEnabled && settings.sharedSettingsEnabled) recordSharedResult(EsdeSyncSettings.PREF_LAST_SETTINGS_PUBLISH, sharedSettings)
             mainHandler.post { callback(EsdeGlobalImportResult(collections, sharedSettings)) }
         }
     }
@@ -248,6 +250,19 @@ class EsdeSyncCoordinator(
                 }
             }.isSuccess
             mainHandler.post { callback(ok) }
+        }
+    }
+
+    fun migrateLegacySharedState(callback: (EsdeSharedStateMigrationResult) -> Unit = {}) {
+        executor.execute {
+            val result = runCatching {
+                EsdeSharedStateMigration(
+                    EsdePrivateFileBackup(File(appContext.filesDir, "esde-sync/backups/shared-migration")),
+                ).migrate(gamelistsDirectory(), sharedStateSyncRoot())
+            }.getOrElse { error ->
+                EsdeSharedStateMigrationResult(errors = listOf(error.message ?: "Migration failed"))
+            }
+            mainHandler.post { callback(result) }
         }
     }
 
@@ -371,20 +386,31 @@ class EsdeSyncCoordinator(
     }
 
     private fun collectionsManager(): EsdeSharedCollectionsManager = EsdeSharedCollectionsManager(
-        gamelistsDirectory(),
+        sharedStateSyncRoot(),
         File(settings.esdeDirectory),
         EsdeSharedSnapshotStore(File(appContext.filesDir, "esde-sync/shared-snapshots")),
         EsdePrivateFileBackup(File(appContext.filesDir, "esde-sync/backups/shared")),
     )
 
     private fun settingsManager(): EsdeSharedSettingsManager = EsdeSharedSettingsManager(
-        gamelistsDirectory(),
+        sharedStateSyncRoot(),
         File(settings.esdeDirectory),
         EsdeSharedSnapshotStore(File(appContext.filesDir, "esde-sync/shared-snapshots")),
         EsdePrivateFileBackup(File(appContext.filesDir, "esde-sync/backups/shared")),
     )
 
     private fun esdeSettingsFile(): File = File(File(settings.esdeDirectory, "settings"), "es_settings.xml")
+
+    private fun sharedStateSyncRoot(): File {
+        check(settings.sharedStateSyncEnabled) { "ES-DE Settings & Collections synchronization is disabled" }
+        val id = settings.sharedStateFolderId
+        check(id.isNotBlank()) { "No ES-DE Settings & Collections sync folder is selected" }
+        val folder = restApi.folders.firstOrNull { it.id == id }
+            ?: error("The selected ES-DE Settings & Collections sync folder is unavailable")
+        val path = folder.path?.takeIf { it.isNotBlank() }
+            ?: error("The selected ES-DE Settings & Collections sync folder has no local path")
+        return File(path)
+    }
 
     private fun requireEsdeStopped() {
         check(!settings.esdeWasLaunched) { "ES-DE is running; shared state can only be applied before Safe Launch" }

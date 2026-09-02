@@ -1,7 +1,6 @@
 package com.nutomic.syncthingandroid.esdesync
 
 import com.google.gson.Gson
-import com.nutomic.syncthingandroid.model.Folder
 import com.nutomic.syncthingandroid.model.RemoteNeed
 import com.nutomic.syncthingandroid.model.RemoteNeedItem
 import org.junit.Assert.assertEquals
@@ -67,6 +66,8 @@ class EsdeSyncStateEvaluatorTest {
                 applicationSelected = true,
                 primaryDeviceSelected = false,
                 gamingFoldersSelected = true,
+                romFolderSelected = true,
+                sharedStateFolderReady = true,
                 metadataSourceReady = false,
             )
         )
@@ -148,41 +149,31 @@ class EsdeSyncStateEvaluatorTest {
     }
 
     @Test fun ignoreRuleHonorsSyncthingFirstMatchSemantics() {
-        assertEquals(EsdeIgnoreRuleState.MISSING, EsdeIgnoreRules.evaluate(listOf("*.tmp")))
-        assertEquals(EsdeIgnoreRuleState.MISSING, EsdeIgnoreRules.evaluate(listOf("(?i)gamelist.xml")))
+        assertEquals(EsdeIgnoreRuleState.MISSING, EsdeRomIgnoreRules.evaluate(listOf("*.tmp")))
+        assertEquals(EsdeIgnoreRuleState.ACTIVE, EsdeRomIgnoreRules.evaluate(listOf("(?i)gamelist.xml")))
         assertEquals(
             EsdeIgnoreRuleState.CONFLICTING_INCLUDE,
-            EsdeIgnoreRules.evaluate(listOf("!**/gamelist.xml", "gamelist.xml")),
+            EsdeRomIgnoreRules.evaluate(listOf("!**/gamelist.xml", "gamelist.xml")),
         )
         val includes = listOf("!/snes", "!/snes/**", "*", "gamelist.xml")
-        assertEquals(EsdeIgnoreRuleState.MISSING, EsdeIgnoreRules.evaluate(includes))
-        val corrected = EsdeIgnoreRules.placeIgnoreRuleFirst(includes)
+        assertEquals(EsdeIgnoreRuleState.MISSING, EsdeRomIgnoreRules.evaluate(includes))
+        val corrected = EsdeRomIgnoreRules.placeIgnoreRuleFirst(includes)
         assertEquals("gamelist.xml", corrected.first())
-        assertEquals(EsdeIgnoreRules.REQUIRED_RULES, corrected.take(EsdeIgnoreRules.REQUIRED_RULES.size))
-        assertEquals(EsdeIgnoreRuleState.ACTIVE, EsdeIgnoreRules.evaluate(corrected))
+        assertEquals(EsdeIgnoreRuleState.ACTIVE, EsdeRomIgnoreRules.evaluate(corrected))
         assertEquals(1, corrected.count { it == "gamelist.xml" })
-        assertEquals(corrected, EsdeIgnoreRules.placeIgnoreRuleFirst(corrected))
-        assertTrue(corrected.indexOf("!/.esde-sync-global/settings/shared-settings.json") < corrected.indexOf("*"))
+        assertEquals(corrected, EsdeRomIgnoreRules.placeIgnoreRuleFirst(corrected))
+        assertFalse(corrected.any { it.contains(".esde-sync-global") })
     }
 
-    @Test fun gamelistIgnoreProtectionTargetsOnlySelectedMasterRomsFolder() {
-        val folders = listOf(
-            folder("roms", "Master", "Roms"),
-            folder("collections", "Master", "ES-DE / Collections"),
-            folder("settings", "Saves & Settings", "PSX / Duckstation Patched"),
-            folder("legacy", "", "Master / Roms"),
-        )
-
+    @Test fun sharedStateIgnoreRulesAreIndependentFromRomRules() {
+        val existing = listOf("!/collections/*.xcc", "*", "gamelist.xml")
+        val corrected = EsdeSharedStateIgnoreRules.placeRulesFirst(existing)
+        assertEquals(EsdeIgnoreRuleState.ACTIVE, EsdeSharedStateIgnoreRules.evaluate(corrected))
+        assertEquals(EsdeSharedStateIgnoreRules.REQUIRED_RULES, corrected.take(2))
+        assertEquals("gamelist.xml", corrected.last())
         assertEquals(
-            setOf("roms", "legacy"),
-            EsdeIgnoreRuleManager.targetFolderIds(
-                setOf("roms", "collections", "settings", "legacy"),
-                folders,
-            ),
-        )
-        assertEquals(
-            emptySet<String>(),
-            EsdeIgnoreRuleManager.targetFolderIds(setOf("collections", "settings"), folders),
+            EsdeIgnoreRuleState.MISSING,
+            EsdeSharedStateIgnoreRules.evaluate(listOf("*", "!/.esde-sync-global", "!/.esde-sync-global/**")),
         )
     }
 
@@ -195,9 +186,4 @@ class EsdeSyncStateEvaluatorTest {
         this.type = type
     }
 
-    private fun folder(id: String, group: String, label: String) = Folder().apply {
-        this.id = id
-        this.group = group
-        this.label = label
-    }
 }

@@ -18,16 +18,17 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -37,6 +38,9 @@ import androidx.preference.PreferenceManager
 import com.nutomic.syncthingandroid.R
 import com.nutomic.syncthingandroid.activities.FolderPickerActivity
 import com.nutomic.syncthingandroid.esdesync.EsdeIgnoreRuleManager
+import com.nutomic.syncthingandroid.esdesync.EsdeFolderRoleMigration
+import com.nutomic.syncthingandroid.esdesync.EsdeIgnoreRuleState
+import com.nutomic.syncthingandroid.esdesync.EsdeRomIgnoreRules
 import com.nutomic.syncthingandroid.esdesync.EsdeSafeLaunchActivity
 import com.nutomic.syncthingandroid.esdesync.EsdeSyncSettings
 import com.nutomic.syncthingandroid.model.Device
@@ -65,13 +69,49 @@ fun SettingsGamingScreen() {
     val preferences = remember { PreferenceManager.getDefaultSharedPreferences(context) }
     val settings = remember { EsdeSyncSettings(preferences) }
     val enabled = rememberPreferenceState(EsdeSyncSettings.PREF_ENABLED, false)
+    val sharedStateEnabled = rememberPreferenceState(EsdeSyncSettings.PREF_SHARED_STATE_ENABLED, false)
     var directory by remember { mutableStateOf(settings.esdeDirectory) }
     var gamelistDirectory by remember { mutableStateOf(settings.gamelistDirectory) }
     var applicationPackage by remember { mutableStateOf(settings.applicationPackage) }
     var primaryDevice by remember { mutableStateOf(settings.primaryDeviceId) }
     var selectedFolders by remember { mutableStateOf(settings.selectedFolderIds) }
+    var romFolder by remember { mutableStateOf(settings.romFolderId) }
+    var sharedStateFolder by remember { mutableStateOf(settings.sharedStateFolderId) }
     var showDevices by remember { mutableStateOf(false) }
     var showFolders by remember { mutableStateOf(false) }
+    var showRomFolder by remember { mutableStateOf(false) }
+    var showSharedStateFolder by remember { mutableStateOf(false) }
+    var showMigrationConfirmation by remember { mutableStateOf(false) }
+    var romProtectionStatus by remember { mutableStateOf("Not selected") }
+
+    val folderSignature = api?.folders?.joinToString("|") { "${it.id}:${it.group}:${it.label}" }.orEmpty()
+    LaunchedEffect(api, folderSignature, romFolder) {
+        val currentApi = api ?: return@LaunchedEffect
+        if (romFolder.isBlank()) {
+            EsdeFolderRoleMigration.legacyRomFolderId(currentApi.folders)?.let { migrated ->
+                romFolder = migrated
+                settings.romFolderId = migrated
+            }
+        }
+        val assigned = romFolder
+        if (assigned.isBlank()) {
+            romProtectionStatus = "Not selected"
+        } else if (currentApi.folders.none { it.id == assigned }) {
+            romProtectionStatus = "Unavailable · select an existing Syncthing folder"
+        } else {
+            currentApi.getFolderIgnoreList(assigned, { response ->
+                (context as Activity).runOnUiThread {
+                    romProtectionStatus = when (EsdeRomIgnoreRules.evaluate(response.ignore.orEmpty().asList())) {
+                        EsdeIgnoreRuleState.ACTIVE -> "Protected · gamelist.xml remains local"
+                        EsdeIgnoreRuleState.MISSING -> "Missing · select this folder again to apply protection"
+                        EsdeIgnoreRuleState.CONFLICTING_INCLUDE -> "Conflicting include rule · manual review required"
+                    }
+                }
+            }, {
+                (context as Activity).runOnUiThread { romProtectionStatus = "Unavailable · ignore list could not be read" }
+            })
+        }
+    }
 
     val directoryPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
@@ -119,6 +159,16 @@ fun SettingsGamingScreen() {
                 title = { Text(stringResource(R.string.esde_sync_enable)) },
                 summary = { Text(stringResource(R.string.esde_sync_enable_summary)) },
                 state = enabled,
+            )
+        }
+        item {
+            Preference(
+                title = { Text("ROM / gamelist sync folder") },
+                summary = { Text(api?.folders?.firstOrNull { it.id == romFolder }?.let(::fullFolderDisplayName)
+                    ?.let { "$it · $romProtectionStatus" }
+                    ?: "Not selected · choose the folder containing the per-system gamelist.xml files") },
+                onClick = { showRomFolder = true },
+                enabled = enabled.value && api != null,
             )
         }
         item {
@@ -207,16 +257,35 @@ fun SettingsGamingScreen() {
                 summary = {
                     Column {
                         Text(if (selectedFolders.isEmpty()) stringResource(R.string.esde_sync_not_selected) else "${selectedFolders.size} selected")
-                        Text("Include every ROM metadata, save, emulator settings and Collections folder used when changing handhelds.")
+                        Text("Include every ROM metadata, save and emulator folder that must be current before play.")
                     }
                 },
                 onClick = { showFolders = true },
                 enabled = enabled.value && api != null,
             )
         }
-        item { Preference(title = { Text("Automatic gamelist.xml protection") }, summary = { Text("SafeSync applies the basename rule gamelist.xml only to the selected Master / Roms sync folder, where the local system gamelists are stored. Collections, settings and save folders are not modified.") }) }
+        item { Preference(title = { Text("Automatic gamelist.xml protection") }, summary = { Text("SafeSync applies the basename rule only to the explicitly assigned ROM / gamelist folder. Its display name may be changed without losing the assignment.") }) }
         item { GamingSectionHeader("Synchronized Content") }
-        item { Preference(title = { Text("Collections & ES-DE setting categories") }, summary = { Text("Choose categories, review what each contains, and publish or import explicitly. Category switches select what is synchronized; they never toggle the ES-DE feature itself.") }, onClick = { navigator.navigateTo(SettingsRoute.GamingSharedState) }, enabled = enabled.value) }
+        item { SwitchPreference(title = { Text("Synchronize ES-DE Settings & Collections") }, summary = { Text("Optional and technically separate from ROMs and saves. Turn this off on devices that must keep all ES-DE settings and Collections local.") }, state = sharedStateEnabled, enabled = enabled.value) }
+        if (sharedStateEnabled.value) item {
+            Preference(
+                title = { Text("ES-DE Settings & Collections sync folder") },
+                summary = { Text(api?.folders?.firstOrNull { it.id == sharedStateFolder }?.let(::fullFolderDisplayName)
+                    ?: "Not selected · choose the dedicated shared-state Syncthing folder") },
+                onClick = { showSharedStateFolder = true },
+                enabled = enabled.value && api != null,
+            )
+        }
+        if (sharedStateEnabled.value && sharedStateFolder.isNotBlank()) item {
+            Preference(
+                title = { Text("Migrate legacy shared state") },
+                summary = { Text("Validates and copies recoverable .esde-sync-global data from the old ROM-root location without deleting it or overwriting conflicts.") },
+                onClick = {
+                    showMigrationConfirmation = true
+                },
+            )
+        }
+        item { Preference(title = { Text("Collections & ES-DE setting categories") }, summary = { Text("Choose categories, review what each contains, and publish or import explicitly. Category switches select what is synchronized; they never toggle the ES-DE feature itself.") }, onClick = { navigator.navigateTo(SettingsRoute.GamingSharedState) }, enabled = enabled.value && sharedStateEnabled.value && sharedStateFolder.isNotBlank()) }
         item { GamingSectionHeader("Safe Launch & Android") }
         item {
             Preference(
@@ -264,26 +333,73 @@ fun SettingsGamingScreen() {
         onDismiss = { showDevices = false },
     )
     if (showFolders) FolderDialog(
-        folders = api?.folders?.sortedWith(compareBy<Folder> { it.group }.thenBy { it.label }.thenBy { it.id }) ?: emptyList(),
+        folders = api?.folders?.filter { it.id != sharedStateFolder }
+            ?.sortedWith(compareBy<Folder> { it.group }.thenBy { it.label }.thenBy { it.id }) ?: emptyList(),
         selected = selectedFolders,
         primaryDevice = primaryDevice,
         onSave = {
-            selectedFolders = it
-            settings.selectedFolderIds = it
+            selectedFolders = it - sharedStateFolder
+            settings.selectedFolderIds = selectedFolders
             showFolders = false
-            if (api != null && it.isNotEmpty()) EsdeIgnoreRuleManager(api).ensure(it) { result ->
+        },
+        onDismiss = { showFolders = false },
+    )
+    if (showRomFolder) FolderRoleDialog(
+        title = "ROM / gamelist sync folder",
+        folders = api?.folders.orEmpty(),
+        selected = romFolder,
+        primaryDevice = primaryDevice,
+        onSelect = { id ->
+            romFolder = id
+            settings.romFolderId = id
+            selectedFolders += id
+            settings.selectedFolderIds = selectedFolders
+            showRomFolder = false
+            api?.let { rest -> EsdeIgnoreRuleManager(rest).ensureRom(id) { result ->
                 (context as Activity).runOnUiThread {
-                    val warning = if (result.conflicting > 0) " Master / Roms needs manual review." else ""
-                    val message = if (result.checked == 0) {
-                        "No selected Master / Roms folder found; no ignore list was changed."
-                    } else {
-                        "Protected Master / Roms; updated ${result.updated}.$warning"
+                    val message = when {
+                        result.checked == 0 -> "The assigned ROM folder is unavailable; no ignore list was changed."
+                        result.conflicting > 0 -> "ROM folder assigned, but its gamelist.xml rule needs manual review."
+                        else -> "ROM folder assigned and gamelist.xml protected; ${result.updated} ignore list updated."
                     }
                     Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                 }
-            }
+            } }
         },
-        onDismiss = { showFolders = false },
+        onDismiss = { showRomFolder = false },
+    )
+    if (showSharedStateFolder) FolderRoleDialog(
+        title = "ES-DE Settings & Collections sync folder",
+        folders = api?.folders.orEmpty(),
+        selected = sharedStateFolder,
+        primaryDevice = primaryDevice,
+        onSelect = { id ->
+            sharedStateFolder = id
+            settings.sharedStateFolderId = id
+            selectedFolders -= id
+            settings.selectedFolderIds = selectedFolders
+            showSharedStateFolder = false
+            api?.let { rest -> EsdeIgnoreRuleManager(rest).ensureSharedState(id) { result ->
+                (context as Activity).runOnUiThread {
+                    Toast.makeText(context, if (result.failed > 0) "Shared-state folder assigned, but its ignore list could not be updated." else "Shared-state folder assigned and isolated from raw ES-DE files.", Toast.LENGTH_LONG).show()
+                }
+            } }
+        },
+        onDismiss = { showSharedStateFolder = false },
+    )
+    if (showMigrationConfirmation) AlertDialog(
+        onDismissRequest = { showMigrationConfirmation = false },
+        title = { Text("MIGRATE LEGACY SHARED STATE") },
+        text = { Text("SafeSync will validate and privately back up legacy Collections and shared settings from the old ROM-root location, then copy only missing files to the selected Settings & Collections folder. Existing destination files and legacy source files will not be overwritten or deleted.") },
+        confirmButton = {
+            Button(onClick = {
+                showMigrationConfirmation = false
+                service?.esdeSyncCoordinator?.migrateLegacySharedState { result ->
+                    Toast.makeText(context, "Migration: ${result.copied} copied, ${result.skipped} skipped, ${result.conflicts.size} conflicts, ${result.errors.size} errors", Toast.LENGTH_LONG).show()
+                }
+            }) { Text("VALIDATE & MIGRATE") }
+        },
+        dismissButton = { TextButton(onClick = { showMigrationConfirmation = false }) { Text("CANCEL") } },
     )
 }
 
@@ -338,12 +454,42 @@ private fun folderDisplayName(folder: Folder): String = folder.label.takeIf { it
     ?: folder.path?.let(::File)?.name?.takeIf { it.isNotBlank() }
     ?: folder.id
 
+private fun fullFolderDisplayName(folder: Folder): String = folder.group.takeIf { it.isNotBlank() }
+    ?.let { "$it / ${folderDisplayName(folder)}" } ?: folderDisplayName(folder)
+
+@Composable
+internal fun FolderRoleDialog(
+    title: String,
+    folders: List<Folder>,
+    selected: String,
+    primaryDevice: String,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) { folders.forEach { folder ->
+            Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(selected = folder.id == selected, onClick = { onSelect(folder.id) })
+                Column {
+                    Text(fullFolderDisplayName(folder))
+                    if (primaryDevice.isNotBlank() && folder.getDevice(primaryDevice) == null) {
+                        Text("Not shared with the selected Primary Sync Device", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            }
+        } } },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
 @Composable
 private fun GamingSectionHeader(title: String) {
     Text(
         title.uppercase(),
         modifier = Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 4.dp),
-        color = Color(0xFF9C001E),
+        color = MaterialTheme.colorScheme.primary,
         fontWeight = FontWeight.Bold,
     )
 }
@@ -365,6 +511,8 @@ fun SettingsGamingDiagnosticsScreen() {
         item { Preference(title = { Text("Gamelist root directory") }, summary = { Text(settings.gamelistDirectory.ifBlank { "Not selected" }) }) }
         item { Preference(title = { Text("Primary peer") }, summary = { Text(settings.primaryDeviceId.ifBlank { "Not selected" }) }) }
         item { Preference(title = { Text("Selected folders") }, summary = { Text(settings.selectedFolderIds.joinToString().ifBlank { "None" }) }) }
+        item { Preference(title = { Text("ROM / gamelist folder") }, summary = { Text(settings.romFolderId.ifBlank { "Not selected" }) }) }
+        item { Preference(title = { Text("Settings & Collections folder") }, summary = { Text(if (!settings.sharedStateSyncEnabled) "Disabled" else settings.sharedStateFolderId.ifBlank { "Not selected" }) }) }
         item { Preference(title = { Text("Systems found") }, summary = { Text((diagnostics?.systemsFound ?: 0).toString()) }) }
         item { Preference(title = { Text("Sidecars") }, summary = { Text("total ${diagnostics?.sidecarsTotal ?: 0} · matched ${diagnostics?.matched ?: 0} · unmatched ${diagnostics?.unmatched ?: 0} · invalid ${diagnostics?.invalid ?: 0}") }) }
         item { Preference(title = { Text("FileObserver") }, summary = { Text(if (diagnostics?.observerRunning == true) "Running" else "Stopped") }) }
