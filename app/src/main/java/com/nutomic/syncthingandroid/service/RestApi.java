@@ -1163,6 +1163,12 @@ public class RestApi {
         return cacheEntry;
     }
 
+    /** Updates Safe Launch's conflict inventory after paths were revalidated off the main thread. */
+    public void setDiscoveredConflictFiles(final String folderId,
+                                           final String[] discoveredConflictFiles) {
+        mLocalCompletion.setDiscoveredConflictFiles(folderId, discoveredConflictFiles);
+    }
+
     private void sendBroadcastToApps(Intent intent) {
         String[] packageIdList = {
             // "com.example.syncthingreceiver",

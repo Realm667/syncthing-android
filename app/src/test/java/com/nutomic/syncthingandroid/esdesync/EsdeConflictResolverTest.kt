@@ -25,6 +25,18 @@ class EsdeConflictResolverTest {
         assertTrue(File(backups, "conflicts").listFiles().orEmpty().any { it.readText() == "other" })
     }
 
+    @Test fun conflictRefreshDropsOnlyMissingCachedCopies() {
+        val root = temporary.newFolder("refresh-stale-conflicts")
+        val existing = File(root, "es_settings.sync-conflict-20260902-120000-RG477VV.xml")
+            .apply { writeText("<string name=\"Theme\" value=\"art-book-next\"/>") }
+        val missing = "es_settings.sync-conflict-20260902-120100-RG476HH.xml"
+
+        val result = EsdeConflictResolver(temporary.newFolder("backups-refresh"))
+            .existingConflicts(root, listOf(existing.name, missing))
+
+        assertEquals(listOf(existing.name), result)
+    }
+
     @Test fun useConflictArchivesBothAndReplacesAtomically() {
         val root = temporary.newFolder("folder-replace")
         val backups = temporary.newFolder("backups-replace")
@@ -98,5 +110,13 @@ class EsdeConflictResolverTest {
         val resolver = EsdeConflictResolver(temporary.newFolder("backups-traversal"))
         runCatching { resolver.details(root, "../escape.sync-conflict-20260831-191230-AAAAAAA.dat") }
             .onSuccess { error("Expected traversal to be rejected") }
+    }
+
+    @Test fun conflictRefreshNeverTreatsTraversalAsResolved() {
+        val root = temporary.newFolder("refresh-traversal")
+        val resolver = EsdeConflictResolver(temporary.newFolder("backups-refresh-traversal"))
+        runCatching {
+            resolver.existingConflicts(root, listOf("../escape.sync-conflict-20260902-120200-AAAAAAA.dat"))
+        }.onSuccess { error("Expected conflict refresh traversal to be rejected") }
     }
 }

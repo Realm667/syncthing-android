@@ -21,6 +21,17 @@ internal class EsdeConflictResolver(
     private val backupRoot: File,
     private val gson: Gson = Gson(),
 ) {
+    /**
+     * Revalidates paths retained by Syncthing's asynchronous conflict cache. Missing conflict
+     * copies are stale cache entries, not user decisions, and can therefore be forgotten safely.
+     * Invalid or escaping paths are rejected by resolveFiles and are never treated as resolved.
+     */
+    fun existingConflicts(folderRoot: File, relativePaths: List<String>): List<String> {
+        val uniquePaths = relativePaths.distinct()
+        require(uniquePaths.size <= MAX_BATCH_FILES) { "Too many conflicts in one refresh" }
+        return uniquePaths.filter { resolveFiles(folderRoot, it).conflict.isFile }
+    }
+
     fun details(folderRoot: File, relativePath: String): EsdeConflictDetails {
         val files = resolveFiles(folderRoot, relativePath)
         val match = CONFLICT_MARKER.find(files.conflict.name)

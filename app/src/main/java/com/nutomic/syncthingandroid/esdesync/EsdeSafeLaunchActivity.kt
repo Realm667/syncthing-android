@@ -85,6 +85,8 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     private var conflictFolder by mutableStateOf<EsdeFolderHealth?>(null)
     private var pendingConflictResolution by mutableStateOf<PendingConflictResolution?>(null)
     private var conflictFeedback by mutableStateOf("")
+    private var showPowerOffConfirmation by mutableStateOf(false)
+    private var powerOffFeedback by mutableStateOf("")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -522,14 +524,89 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         finish()
     }
 
+    private fun requestPowerOff() {
+        showPowerOffConfirmation = false
+        val allowed = EsdePowerOffPolicy.canRequest(
+            state = state,
+            esdeWasLaunched = settings.esdeWasLaunched,
+            pendingLocalChanges = settings.pendingLocalChanges,
+            hasOfflineJournal = offlineJournal.load() != null,
+            activeSessionId = settings.activeSessionId,
+        )
+        if (!allowed) {
+            powerOffFeedback = "Power off is available only after ES-DE is closed and all pending changes are synchronized."
+            return
+        }
+
+        val controller = EsdeDevicePowerController(this)
+        if (controller.openSystemShutdownDialog()) {
+            powerOffFeedback = "Android's power-off confirmation was opened."
+            return
+        }
+
+        powerOffFeedback = "Requesting privileged power off…"
+        conflictExecutor.execute {
+            val result = controller.requestRootPowerOff()
+            handler.post {
+                if (isFinishing) return@post
+                powerOffFeedback = when (result) {
+                    EsdePowerOffResult.ROOT_REQUESTED -> "Power off was accepted by the device."
+                    EsdePowerOffResult.UNSUPPORTED ->
+                        "This Android firmware does not allow third-party apps to power off the device. Root or vendor system permission is required."
+                }
+            }
+        }
+    }
+
     private fun retry() {
+        handler.removeCallbacksAndMessages(null)
+        val currentApi = api
+        val foldersById = currentApi?.folders?.associateBy { it.id }.orEmpty()
+        val cachedConflicts = folderHealth.filter { it.conflictFiles.isNotEmpty() }
+        if (currentApi == null || cachedConflicts.isEmpty()) {
+            continueRetry()
+            return
+        }
+
+        state = EsdeSyncState.RESCANNING
+        statusDetail = "Rechecking reported conflict files…"
+        conflictExecutor.execute {
+            val resolver = EsdeConflictResolver(File(filesDir, "esde-sync/backups"))
+            val refreshed = cachedConflicts.map { health ->
+                val root = foldersById[health.id]?.path?.takeIf(String::isNotBlank)?.let(::File)
+                val existing = if (root?.isDirectory == true) {
+                    runCatching { resolver.existingConflicts(root, health.conflictFiles) }
+                        .getOrElse { health.conflictFiles }
+                } else {
+                    health.conflictFiles
+                }
+                RefreshedConflicts(health.id, existing, health.conflictFiles.size - existing.size)
+            }
+            handler.post {
+                if (isFinishing) return@post
+                refreshed.forEach { result ->
+                    currentApi.setDiscoveredConflictFiles(result.folderId, result.existing.toTypedArray())
+                }
+                val removed = refreshed.sumOf(RefreshedConflicts::removed)
+                if (removed > 0) {
+                    conflictFolder = null
+                    conflictFeedback = if (removed == 1) {
+                        "1 stale conflict entry was cleared because its file no longer exists."
+                    } else {
+                        "$removed stale conflict entries were cleared because their files no longer exist."
+                    }
+                }
+                continueRetry()
+            }
+        }
+    }
+
+    private fun continueRetry() {
         if (!settings.esdeWasLaunched && offlineJournal.load() != null) {
-            handler.removeCallbacksAndMessages(null)
             beginPendingReconciliation()
             return
         }
         val retryPostSync = postSyncStarted && settings.launchTimestamp > 0
-        handler.removeCallbacksAndMessages(null)
         preSyncStarted = false
         legacyConfigurationChecked = false
         bootstrapDiscoveryAttempts = 0
@@ -569,16 +646,20 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 pendingConflictResolution = null
                 result.onSuccess { resolvedCount ->
                     val resolvedPaths = pending.relativePaths.toSet()
-                    api?.getFolderStatus(pending.folderId)?.value?.let { cache ->
-                        cache.discoveredConflictFiles = cache.discoveredConflictFiles
-                            .filterNot { it in resolvedPaths }
-                            .toTypedArray()
-                    }
+                    val remaining = folderHealth.firstOrNull { it.id == pending.folderId }
+                        ?.conflictFiles.orEmpty().filterNot { it in resolvedPaths }
+                    api?.setDiscoveredConflictFiles(pending.folderId, remaining.toTypedArray())
                     conflictFolder = null
                     conflictFeedback = "$resolvedCount conflict(s) resolved. All versions were backed up privately."
                     retry()
                 }.onFailure { error ->
-                    conflictFeedback = "Conflict could not be resolved: ${error.message ?: "unknown error"}"
+                    val message = error.message ?: "unknown error"
+                    if (message.startsWith("Conflict copy no longer exists:")) {
+                        conflictFeedback = "The conflict file disappeared while resolving it. Refreshing the conflict list…"
+                        retry()
+                    } else {
+                        conflictFeedback = "Conflict could not be resolved: $message"
+                    }
                 }
             }
         }
@@ -693,6 +774,9 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             if (conflictFeedback.isNotBlank()) {
                 Text(conflictFeedback, color = warningColor(), style = MaterialTheme.typography.bodyMedium)
             }
+            if (powerOffFeedback.isNotBlank()) {
+                Text(powerOffFeedback, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+            }
             Spacer(Modifier.height(8.dp))
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 when (state) {
@@ -719,10 +803,16 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                         ) { Text("DONE") }
                         OutlinedButton(onClick = ::startAgain) { Text("START NEW SESSION") }
                     }
-                    EsdeSyncState.IDLE -> Button(
-                        onClick = ::startAgain,
-                        colors = ButtonDefaults.buttonColors(containerColor = SAFE_GREEN, contentColor = Color(0xFF10210E)),
-                    ) { Text("START NEW SESSION") }
+                    EsdeSyncState.IDLE -> {
+                        Button(
+                            onClick = ::startAgain,
+                            colors = ButtonDefaults.buttonColors(containerColor = SAFE_GREEN, contentColor = Color(0xFF10210E)),
+                        ) { Text("START NEW SESSION") }
+                        Button(
+                            onClick = { showPowerOffConfirmation = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = DANGER_RED, contentColor = Color.White),
+                        ) { Text("POWER OFF DEVICE") }
+                    }
                     EsdeSyncState.OFFLINE_CHANGES_PENDING -> {
                         Button(
                             onClick = ::beginPendingReconciliation,
@@ -769,6 +859,30 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         }
         conflictFolder?.let { ConflictListDialog(it) }
         pendingConflictResolution?.let { ConflictConfirmationDialog(it) }
+        if (showPowerOffConfirmation) PowerOffConfirmationDialog()
+    }
+
+    @Composable
+    private fun PowerOffConfirmationDialog() {
+        AlertDialog(
+            onDismissRequest = { showPowerOffConfirmation = false },
+            title = { Text("POWER OFF DEVICE") },
+            text = {
+                Text(
+                    "ES-DE is closed and synchronization is complete. Power off this device now? " +
+                        "Android may show an additional system or root confirmation.",
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = ::requestPowerOff,
+                    colors = ButtonDefaults.buttonColors(containerColor = DANGER_RED, contentColor = Color.White),
+                ) { Text("POWER OFF") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPowerOffConfirmation = false }) { Text("CANCEL") }
+            },
+        )
     }
 
     @Composable
@@ -1092,6 +1206,12 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         val folderId: String,
         val relativePaths: List<String>,
         val resolution: EsdeConflictResolution,
+    )
+
+    private data class RefreshedConflicts(
+        val folderId: String,
+        val existing: List<String>,
+        val removed: Int,
     )
 
 }
