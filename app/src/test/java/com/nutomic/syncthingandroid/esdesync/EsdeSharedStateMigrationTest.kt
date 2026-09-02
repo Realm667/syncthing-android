@@ -15,7 +15,7 @@ class EsdeSharedStateMigrationTest {
         val destination = temporary.newFolder("shared")
         val legacyGlobal = File(legacy, EsdeGlobalLayout.DIRECTORY)
         val collections = File(legacyGlobal, "collections").apply { mkdirs() }
-        File(collections, "Top.xcc").writeText("<filter name=\"Top\"><rating>5 STARS</rating></filter>")
+        File(collections, "Top.xcc").writeText("<filter name=\"Top\"><ratings>5 STARS</ratings></filter>")
         val settings = File(legacyGlobal, "settings").apply { mkdirs() }
         File(settings, EsdeGlobalLayout.SETTINGS_FILE).writeText("""{"schemaVersion":1,"settings":{}}""")
         val migration = EsdeSharedStateMigration(
@@ -27,7 +27,7 @@ class EsdeSharedStateMigrationTest {
         assertEquals(2, first.copied)
 
         File(File(File(destination, EsdeGlobalLayout.DIRECTORY), "collections"), "Top.xcc")
-            .writeText("<filter name=\"Top\"><rating>4 STARS</rating></filter>")
+            .writeText("<filter name=\"Top\"><ratings>4 STARS</ratings></filter>")
         val second = migration.migrate(legacy, destination)
         assertEquals(listOf("collections${File.separator}Top.xcc"), second.conflicts)
     }
