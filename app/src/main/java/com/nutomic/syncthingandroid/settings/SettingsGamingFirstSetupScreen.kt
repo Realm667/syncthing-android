@@ -22,6 +22,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -41,6 +42,7 @@ import com.nutomic.syncthingandroid.esdesync.EsdeSafeLaunchActivity
 import com.nutomic.syncthingandroid.esdesync.EsdeSharedSettingsCatalog
 import com.nutomic.syncthingandroid.esdesync.EsdeSyncSettings
 import com.nutomic.syncthingandroid.service.SyncthingService
+import kotlinx.coroutines.delay
 import me.zhanghai.compose.preference.Preference
 import me.zhanghai.compose.preference.SwitchPreference
 import me.zhanghai.compose.preference.rememberPreferenceState
@@ -79,9 +81,11 @@ fun SettingsGamingFirstSetupScreen() {
     var showFolders by remember { mutableStateOf(false) }
     var showRomFolder by remember { mutableStateOf(false) }
     var showSharedStateFolder by remember { mutableStateOf(false) }
+    var serviceRefreshRequest by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(serviceRefreshRequest) {
         settings.firstSetupOffered = true
+        settings.firstSetupDeferred = false
         settings.enabled = true
         settings.acquireFirstSetupServiceLease()
         val serviceIntent = Intent(context, SyncthingService::class.java)
@@ -89,6 +93,11 @@ fun SettingsGamingFirstSetupScreen() {
             context.startForegroundService(serviceIntent)
         } else {
             context.startService(serviceIntent)
+        }
+        val activity = context as? SettingsActivity
+        repeat(FIRST_SETUP_SERVICE_REFRESH_ATTEMPTS) {
+            if (activity?.refreshFirstSetupService() == true) return@LaunchedEffect
+            delay(FIRST_SETUP_SERVICE_REFRESH_INTERVAL_MS)
         }
     }
     LaunchedEffect(service, serviceUpdateTick) {
@@ -191,6 +200,7 @@ fun SettingsGamingFirstSetupScreen() {
                     } else {
                         fun complete() {
                             settings.firstSetupComplete = true
+                            settings.firstSetupDeferred = false
                             settings.firstSetupStep = 0
                             settings.releaseFirstSetupServiceLease()
                             service.evaluateRunConditions()
@@ -272,7 +282,13 @@ fun SettingsGamingFirstSetupScreen() {
             }
             2 -> {
                 item { SetupHeading("Primary device and synchronized folders") }
-                if (!syncTargetsReady) item { Preference(title = { Text("Starting Syncthing…") }, summary = { Text("SafeSync keeps Syncthing active during First Setup. The device and folder choices unlock automatically as soon as its local API is ready.") }) }
+                if (!syncTargetsReady) item {
+                    Preference(
+                        title = { Text("Starting Syncthing…") },
+                        summary = { Text("SafeSync keeps Syncthing active during First Setup and refreshes this page automatically. If startup was interrupted, select this row to retry now.") },
+                        onClick = { serviceRefreshRequest++ },
+                    )
+                }
                 item { Preference(title = { Text("Primary Gaming Sync Device") }, summary = { Text(api?.getDevices(false)?.firstOrNull { it.deviceID == primaryDevice }?.displayName ?: primaryDevice.ifBlank { "Not selected · choose the authoritative NAS or desktop" }) }, enabled = syncTargetsReady, onClick = { showDevices = true }) }
                 item { Preference(title = { Text("ROM / gamelist sync folder") }, summary = { Text(api?.folders?.firstOrNull { it.id == romFolder }?.let { if (it.group.isBlank()) it.label.ifBlank { it.id } else "${it.group} / ${it.label.ifBlank { it.id }}" } ?: "Not selected · explicitly assign the folder containing system gamelists") }, enabled = syncTargetsReady, onClick = { showRomFolder = true }) }
                 item { Preference(title = { Text("Gaming Sync Folders") }, summary = { Text(if (selectedFolders.isEmpty()) "Not selected" else "${selectedFolders.size} selected · include ROM metadata, saves and emulator folders required before play") }, enabled = syncTargetsReady, onClick = { showFolders = true }) }
@@ -360,6 +376,8 @@ fun SettingsGamingFirstSetupScreen() {
             Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = {
                     if (step == 0) {
+                        settings.firstSetupDeferred = true
+                        settings.firstSetupStep = 0
                         settings.releaseFirstSetupServiceLease()
                         service?.evaluateRunConditions()
                         navigator.navigateUp()
@@ -414,3 +432,5 @@ private fun SetupHeading(text: String) {
 }
 
 private val SETUP_STEPS = listOf("Device role", "ES-DE", "Syncthing", "Content", "Safety", "Safe Launch")
+private const val FIRST_SETUP_SERVICE_REFRESH_ATTEMPTS = 80
+private const val FIRST_SETUP_SERVICE_REFRESH_INTERVAL_MS = 500L

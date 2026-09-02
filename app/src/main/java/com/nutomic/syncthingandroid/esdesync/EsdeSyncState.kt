@@ -140,6 +140,12 @@ object EsdeSetupEvaluator {
 }
 
 object EsdeFirstSetupPolicy {
+    fun shouldOpenAutomatically(
+        offered: Boolean,
+        complete: Boolean,
+        deferred: Boolean,
+    ): Boolean = offered && !complete && !deferred
+
     fun canChooseSyncTargets(apiReady: Boolean): Boolean = apiReady
 
     fun canFinish(

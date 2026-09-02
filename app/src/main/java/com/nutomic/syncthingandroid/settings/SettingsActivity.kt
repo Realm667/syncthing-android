@@ -106,6 +106,18 @@ class SettingsActivity : SyncthingActivity() {
         serviceUpdateTick++
     }
 
+    /**
+     * First Setup can be opened while the service is still completing its first initialization.
+     * Re-evaluate its forced-start lease and invalidate Compose even when no additional service
+     * state callback is emitted during that narrow startup window.
+     */
+    internal fun refreshFirstSetupService(): Boolean {
+        syncthingServiceState?.evaluateRunConditions()
+        serviceUpdateTick++
+        return syncthingServiceState?.api != null &&
+            syncthingServiceState?.esdeSyncCoordinator != null
+    }
+
     override fun onStop() {
         syncthingServiceState?.let {
             notificationHandler.updatePersistentNotification(it)

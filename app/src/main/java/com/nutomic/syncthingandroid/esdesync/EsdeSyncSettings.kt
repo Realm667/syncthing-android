@@ -27,6 +27,10 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
         get() = preferences.getBoolean(PREF_FIRST_SETUP_COMPLETE, false)
         set(value) { preferences.edit().putBoolean(PREF_FIRST_SETUP_COMPLETE, value).apply() }
 
+    var firstSetupDeferred: Boolean
+        get() = preferences.getBoolean(PREF_FIRST_SETUP_DEFERRED, false)
+        set(value) { preferences.edit().putBoolean(PREF_FIRST_SETUP_DEFERRED, value).apply() }
+
     var firstSetupRole: String
         get() = preferences.getString(PREF_FIRST_SETUP_ROLE, ROLE_RECEIVER) ?: ROLE_RECEIVER
         set(value) { preferences.edit().putString(PREF_FIRST_SETUP_ROLE, value).apply() }
@@ -254,6 +258,7 @@ class EsdeSyncSettings(private val preferences: SharedPreferences) {
         const val PREF_ENABLED = "esdeSync.enabled"
         const val PREF_FIRST_SETUP_OFFERED = "esdeSync.firstSetup.offered"
         const val PREF_FIRST_SETUP_COMPLETE = "esdeSync.firstSetup.complete"
+        const val PREF_FIRST_SETUP_DEFERRED = "esdeSync.firstSetup.deferred"
         const val PREF_FIRST_SETUP_ROLE = "esdeSync.firstSetup.role"
         const val PREF_FIRST_SETUP_STEP = "esdeSync.firstSetup.step"
         private const val PREF_FIRST_SETUP_PREVIOUS_FORCE_STATE = "esdeSync.firstSetup.previousForceState"

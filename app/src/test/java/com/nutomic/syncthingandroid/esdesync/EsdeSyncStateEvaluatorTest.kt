@@ -110,6 +110,13 @@ class EsdeSyncStateEvaluatorTest {
         )
     }
 
+    @Test fun deferredFirstSetupIsNotOpenedAgainUntilTheUserRequestsIt() {
+        assertTrue(EsdeFirstSetupPolicy.shouldOpenAutomatically(true, false, false))
+        assertFalse(EsdeFirstSetupPolicy.shouldOpenAutomatically(true, false, true))
+        assertFalse(EsdeFirstSetupPolicy.shouldOpenAutomatically(true, true, false))
+        assertFalse(EsdeFirstSetupPolicy.shouldOpenAutomatically(false, false, false))
+    }
+
     @Test fun doneEndsInIdleWithoutStartingAnotherSynchronization() {
         assertEquals(
             EsdeSyncState.IDLE,

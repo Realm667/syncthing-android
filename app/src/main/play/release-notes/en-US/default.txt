@@ -1,6 +1,6 @@
-ES-DE SafeSync 2.1.4.12
-- RETRY now clears stale conflict entries only when their local conflict files no longer exist.
-- Real conflicts remain protected by the existing single-file and batch resolution workflow.
-- Adds POWER OFF DEVICE to the completed IDLE screen with confirmation and safety checks.
-- Uses supported system/vendor shutdown handling where available and an explicit root fallback.
-- Unsupported devices remain safely idle and receive a clear permission explanation.
+ES-DE SafeSync 2.1.4.13
+- SET UP LATER now leaves First Setup without immediately reopening it.
+- First Setup automatically starts and refreshes Syncthing during initial configuration.
+- Device and folder choices unlock as soon as the local API is ready, without restarting the app.
+- The startup status row can be selected to retry initialization manually.
+- Completing First Setup clears any previous deferral and opens Safe Launch normally.

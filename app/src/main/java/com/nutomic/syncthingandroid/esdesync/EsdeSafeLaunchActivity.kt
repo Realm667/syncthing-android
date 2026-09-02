@@ -90,7 +90,12 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (settings.firstSetupOffered && !settings.firstSetupComplete) {
+        if (EsdeFirstSetupPolicy.shouldOpenAutomatically(
+                offered = settings.firstSetupOffered,
+                complete = settings.firstSetupComplete,
+                deferred = settings.firstSetupDeferred,
+            )
+        ) {
             startActivity(
                 Intent(this, SettingsActivity::class.java)
                     .putExtra(SettingsActivity.EXTRA_START_DESTINATION, "GamingFirstSetup")
