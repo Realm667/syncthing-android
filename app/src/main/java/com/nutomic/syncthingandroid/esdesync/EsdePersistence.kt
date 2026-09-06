@@ -21,6 +21,7 @@ class EsdeSnapshotStore(private val root: File, private val gson: Gson = Gson())
     }
 
     fun save(system: String, values: Map<String, EsdeMetadata>) {
+        if (fileFor(system).isFile && load(system) == values) return
         AtomicFileWriter.write(fileFor(system)) { output ->
             output.writer(StandardCharsets.UTF_8).apply { gson.toJson(values, this); flush() }
         }

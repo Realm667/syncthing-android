@@ -12,6 +12,32 @@ class EsdeGamelistParserTest {
     @get:Rule val temporary = TemporaryFolder()
     private val parser = EsdeGamelistParser()
 
+    @Test fun appliedSnapshotMatchesCommittedXmlAndBacksUpOriginalOnlyOnChange() {
+        val file = gamelist("<gameList><game><path>./Game.sfc</path><favorite>false</favorite><playcount>7</playcount></game></gameList>")
+        val original = file.readText()
+        var backups = 0
+        val applied = parser.applyWithSnapshot(file, mapOf("./Game.sfc" to EsdeMetadata(favorite = true))) {
+            assertEquals(original, file.readText())
+            backups++
+        }
+        assertEquals(1, backups)
+        assertEquals(1, applied.result.changed)
+        assertEquals(7L, applied.metadata["./Game.sfc"]!!.playcount)
+        assertEquals(parser.parse(file), applied.metadata)
+        val unchanged = parser.applyWithSnapshot(file, mapOf("./Game.sfc" to EsdeMetadata(favorite = true))) { backups++ }
+        assertEquals(0, unchanged.result.changed)
+        assertEquals(1, backups)
+    }
+
+    @Test fun failedBackupLeavesOriginalXmlUntouched() {
+        val file = gamelist("<gameList><game><path>./Game.sfc</path><favorite>false</favorite></game></gameList>")
+        val original = file.readText()
+        assertTrue(runCatching {
+            parser.applyWithSnapshot(file, mapOf("./Game.sfc" to EsdeMetadata(favorite = true))) { error("disk full") }
+        }.isFailure)
+        assertEquals(original, file.readText())
+    }
+
     @Test fun parsesAllFieldsUnicodeNestedAndM3u() {
         val file = gamelist("""
             <gameList>

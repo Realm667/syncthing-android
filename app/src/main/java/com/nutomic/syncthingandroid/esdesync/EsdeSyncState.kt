@@ -23,6 +23,11 @@ enum class EsdeSyncState {
 }
 
 object EsdeSafeLaunchCompletionPolicy {
+    fun canResumeAutomatically(state: EsdeSyncState): Boolean = state !in setOf(
+        EsdeSyncState.IDLE, EsdeSyncState.SAFE_TO_SWITCH,
+        EsdeSyncState.ESDE_RUNNING, EsdeSyncState.OFFLINE_PLAYING,
+    )
+
     fun afterDone(current: EsdeSyncState): EsdeSyncState =
         if (current == EsdeSyncState.SAFE_TO_SWITCH) EsdeSyncState.IDLE else current
 }

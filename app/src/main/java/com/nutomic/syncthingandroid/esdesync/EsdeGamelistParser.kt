@@ -22,9 +22,13 @@ import org.xml.sax.helpers.DefaultHandler
 
 class EsdeGamelistParser {
     data class ApplyResult(val matched: Int, val unmatched: Int, val changed: Int)
+    data class AppliedSnapshot(val result: ApplyResult, val metadata: LinkedHashMap<String, EsdeMetadata>)
 
     fun parse(file: File): LinkedHashMap<String, EsdeMetadata> {
-        val document = parseDocument(file)
+        return metadataSnapshot(parseDocument(file))
+    }
+
+    private fun metadataSnapshot(document: Document): LinkedHashMap<String, EsdeMetadata> {
         val result = LinkedHashMap<String, EsdeMetadata>()
         for (game in gameElements(document)) {
             val rawPath = childText(game, "path") ?: continue
@@ -34,7 +38,15 @@ class EsdeGamelistParser {
         return result
     }
 
-    fun apply(file: File, updates: Map<String, EsdeMetadata>): ApplyResult {
+    fun apply(file: File, updates: Map<String, EsdeMetadata>): ApplyResult =
+        applyWithSnapshot(file, updates).result
+
+    /** Parse once; backup the original file only when a real change is about to be committed. */
+    fun applyWithSnapshot(
+        file: File,
+        updates: Map<String, EsdeMetadata>,
+        beforeWrite: () -> Unit = {},
+    ): AppliedSnapshot {
         val document = parseDocument(file)
         val remaining = updates.toMutableMap()
         var matched = 0
@@ -46,8 +58,11 @@ class EsdeGamelistParser {
             matched++
             if (applyMetadata(document, game, metadata)) changed++
         }
-        if (changed > 0) writeDocument(file, document)
-        return ApplyResult(matched, remaining.size, changed)
+        if (changed > 0) {
+            beforeWrite()
+            writeDocument(file, document)
+        }
+        return AppliedSnapshot(ApplyResult(matched, remaining.size, changed), metadataSnapshot(document))
     }
 
     private fun gameElements(document: Document): List<Element> {

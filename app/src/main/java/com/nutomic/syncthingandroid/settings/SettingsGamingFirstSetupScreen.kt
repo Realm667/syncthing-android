@@ -20,6 +20,8 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -42,7 +44,7 @@ import com.nutomic.syncthingandroid.esdesync.EsdeSafeLaunchActivity
 import com.nutomic.syncthingandroid.esdesync.EsdeSharedSettingsCatalog
 import com.nutomic.syncthingandroid.esdesync.EsdeSyncSettings
 import com.nutomic.syncthingandroid.service.SyncthingService
-import kotlinx.coroutines.delay
+import com.nutomic.syncthingandroid.esdesync.EsdeServiceSnapshot
 import me.zhanghai.compose.preference.Preference
 import me.zhanghai.compose.preference.SwitchPreference
 import me.zhanghai.compose.preference.rememberPreferenceState
@@ -57,8 +59,8 @@ fun SettingsGamingFirstSetupScreen() {
     val context = LocalContext.current
     val navigator = LocalSettingsNavigator.current
     val service = LocalSyncthingService.current
-    val serviceUpdateTick = LocalServiceUpdateTick.current
-    val api = service?.api
+    val readiness = service?.esdeReadiness?.state?.collectAsState()?.value ?: EsdeServiceSnapshot()
+    val api = if (readiness.apiReady) service?.api else null
     val preferences = remember { PreferenceManager.getDefaultSharedPreferences(context) }
     val settings = remember { EsdeSyncSettings(preferences) }
     val collectionsEnabled = rememberPreferenceState(EsdeSyncSettings.PREF_SHARED_COLLECTIONS_ENABLED, false)
@@ -83,6 +85,22 @@ fun SettingsGamingFirstSetupScreen() {
     var showSharedStateFolder by remember { mutableStateOf(false) }
     var serviceRefreshRequest by remember { mutableIntStateOf(0) }
 
+    DisposableEffect(preferences) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+            directory = settings.esdeDirectory
+            gamelistDirectory = settings.gamelistDirectory
+            applicationPackage = settings.applicationPackage
+            primaryDevice = settings.primaryDeviceId
+            selectedFolders = settings.selectedFolderIds
+            romFolder = settings.romFolderId
+            sharedStateFolder = settings.sharedStateFolderId
+            role = settings.firstSetupRole
+            sourceInitialized = settings.bootstrapComplete
+        }
+        preferences.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { preferences.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+
     LaunchedEffect(serviceRefreshRequest) {
         settings.firstSetupOffered = true
         settings.firstSetupDeferred = false
@@ -94,13 +112,9 @@ fun SettingsGamingFirstSetupScreen() {
         } else {
             context.startService(serviceIntent)
         }
-        val activity = context as? SettingsActivity
-        repeat(FIRST_SETUP_SERVICE_REFRESH_ATTEMPTS) {
-            if (activity?.refreshFirstSetupService() == true) return@LaunchedEffect
-            delay(FIRST_SETUP_SERVICE_REFRESH_INTERVAL_MS)
-        }
+        service?.evaluateRunConditions()
     }
-    LaunchedEffect(service, serviceUpdateTick) {
+    LaunchedEffect(service, readiness) {
         service?.evaluateRunConditions()
         if (romFolder.isBlank()) {
             EsdeFolderRoleMigration.legacyRomFolderId(service?.api?.folders.orEmpty())?.let { migrated ->
@@ -230,7 +244,7 @@ fun SettingsGamingFirstSetupScreen() {
     val canFinish = EsdeFirstSetupPolicy.canFinish(
         coreComplete = coreComplete,
         apiReady = api != null,
-        coordinatorReady = service?.esdeSyncCoordinator != null,
+        coordinatorReady = readiness.coordinatorReady,
         role = role,
         sourceInitialized = sourceInitialized,
     )
@@ -432,5 +446,3 @@ private fun SetupHeading(text: String) {
 }
 
 private val SETUP_STEPS = listOf("Device role", "ES-DE", "Syncthing", "Content", "Safety", "Safe Launch")
-private const val FIRST_SETUP_SERVICE_REFRESH_ATTEMPTS = 80
-private const val FIRST_SETUP_SERVICE_REFRESH_INTERVAL_MS = 500L

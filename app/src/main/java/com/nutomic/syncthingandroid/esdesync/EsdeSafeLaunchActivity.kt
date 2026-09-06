@@ -35,6 +35,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -65,7 +66,8 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     private val handler = Handler(android.os.Looper.getMainLooper())
     private val preferences by lazy { PreferenceManager.getDefaultSharedPreferences(this) }
     private val settings by lazy { EsdeSyncSettings(preferences) }
-    private val offlineJournal by lazy { EsdeOfflineJournal(File(filesDir, "esde-sync/offline-journal.json")) }
+    private val journalRepository by lazy { EsdeOfflineJournalRepository.get(File(filesDir, "esde-sync/offline-journal.json")) }
+    private val journalEntry get() = journalRepository.state.value.entry
     private var state by mutableStateOf(EsdeSyncState.STARTING)
     private var statusDetail by mutableStateOf("")
     private var folderHealth by mutableStateOf<List<EsdeFolderHealth>>(emptyList())
@@ -78,7 +80,19 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     private val freshFolderStatus = ConcurrentHashMap<String, FolderStatus>()
     private val freshRemoteCompletion = ConcurrentHashMap<String, CompletionInfo>()
     private val freshRemoteNeed = ConcurrentHashMap<String, RemoteNeed>()
-    private val freshRemoteNeedFetchedAt = ConcurrentHashMap<String, Long>()
+    private val requests = EsdeRequestGeneration()
+    private val pollPolicy = EsdePollPolicy()
+
+    private fun accepts(token: Long): Boolean = requests.accepts(token) && !isFinishing && !isDestroyed
+
+    private fun invalidateRequests() {
+        requests.invalidate()
+        handler.removeCallbacksAndMessages(null)
+        freshFolderStatus.clear()
+        freshRemoteCompletion.clear()
+        freshRemoteNeed.clear()
+        pollPolicy.reset()
+    }
     private val conflictExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "ESDESync-ConflictResolver")
     }
@@ -112,9 +126,9 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             settings.beginSession(previous)
             preferences.edit().putInt(Constants.PREF_BTNSTATE_FORCE_START_STOP, Constants.BTNSTATE_FORCE_START).apply()
         }
-        if (settings.pendingLocalChanges && offlineJournal.load() == null) {
-            offlineJournal.migratePending(settings.activeSessionId, settings.requiredFolderIds())
-        }
+        updateJournal({ journal ->
+            if (settings.pendingLocalChanges) journal.migratePending(settings.activeSessionId, settings.requiredFolderIds())
+        }) { resumeSyncWhenReady() }
         val serviceIntent = Intent(this, SyncthingService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(serviceIntent) else startService(serviceIntent)
         setContent { ApplicationTheme { SafeLaunchScreen() } }
@@ -122,18 +136,42 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
 
     override fun onServiceConnected(name: ComponentName, binder: IBinder) {
         super.onServiceConnected(name, binder)
-        if (!preSyncStarted && !settings.esdeWasLaunched) {
-            if (offlineJournal.load() != null) beginPendingReconciliation() else beginPreSync()
-        }
+        resumeSyncWhenReady()
     }
 
     override fun onResume() {
         super.onResume()
+        // Only an Activity resume can end a play session. A late service/journal callback cannot.
         if (settings.esdeWasLaunched && settings.launchTimestamp > 0 && !postSyncStarted) {
             postSyncStarted = true
-            handler.postDelayed({ beginPostSync() }, RETURN_FLUSH_MS)
-        } else if (!settings.esdeWasLaunched && state == EsdeSyncState.NOT_CONFIGURED && preSyncStarted) {
+            updateJournal({}) {
+                handler.postDelayed({ beginPostSync() }, RETURN_FLUSH_MS)
+            }
+        } else resumeSyncWhenReady()
+    }
+
+    private fun resumeSyncWhenReady() {
+        if (!journalRepository.state.value.loaded || service == null ||
+            !EsdeSafeLaunchCompletionPolicy.canResumeAutomatically(state)) return
+        if (!settings.esdeWasLaunched && state == EsdeSyncState.NOT_CONFIGURED && preSyncStarted) {
             handler.postDelayed({ if (!isFinishing) retry() }, SETTINGS_RETURN_DELAY_MS)
+        } else if (!preSyncStarted && !settings.esdeWasLaunched) {
+            if (journalEntry != null) beginPendingReconciliation() else beginPreSync()
+        }
+    }
+
+    private fun updateJournal(action: (EsdeOfflineJournal) -> Unit, onSuccess: () -> Unit = {}) {
+        val token = requests.current
+        journalRepository.update(action) { result ->
+            handler.post {
+                if (!accepts(token)) return@post
+                result.fold(onSuccess = { onSuccess() }, onFailure = {
+                    invalidateRequests()
+                    settings.pendingLocalChanges = true
+                    state = EsdeSyncState.ERROR
+                    statusDetail = "Could not persist offline synchronization state: ${it.message}. Retry before switching devices."
+                })
+            }
         }
     }
 
@@ -171,7 +209,9 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             }
             state = EsdeSyncState.STARTING
             statusDetail = "Checking required ES-DE settings…"
+            val token = requests.current
             coordinator.ensureLegacyGamelistLocation { success, message ->
+                if (!accepts(token)) return@ensureLegacyGamelistLocation
                 if (!success) {
                     state = EsdeSyncState.ERROR
                     statusDetail = message
@@ -197,6 +237,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     }
 
     private fun pollPreSync() {
+        val token = requests.current
         refreshFreshGateData {
             val evaluated = evaluateGate()
             state = evaluated
@@ -208,6 +249,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                     state = EsdeSyncState.ERROR
                     statusDetail = "Metadata bridge is not available."
                 } else coordinator.importSharedStateBeforeLaunch { shared ->
+                    if (!accepts(token)) return@importSharedStateBeforeLaunch
                     if (!shared.successful) {
                         state = EsdeSyncState.ERROR
                         statusDetail = shared.errorSummary()
@@ -215,6 +257,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                         sharedWarning = (shared.collections.warnings + shared.settings.warnings).joinToString("; ")
                         statusDetail = "Applying synchronized per-game metadata…"
                         coordinator.importNow(finalizeBootstrap = !settings.bootstrapComplete) { metadata ->
+                            if (!accepts(token)) return@importNow
                             if (metadata.invalid > 0) {
                                 state = EsdeSyncState.ERROR
                                 statusDetail = "Per-game metadata contains ${metadata.invalid} invalid sidecar(s)."
@@ -232,7 +275,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 statusDetail = "Synchronization is taking longer than expected. You can retry or start without sync."
                 return@refreshFreshGateData
             }
-            handler.postDelayed(::pollPreSync, POLL_MS)
+            handler.postDelayed(::pollPreSync, pollPolicy.nextDelay(evaluated to folderHealth))
         }
     }
 
@@ -240,47 +283,58 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         val api = api ?: run { onComplete(); return }
         val ids = activeFolderIds()
         if (ids.isEmpty()) { onComplete(); return }
+        val token = requests.current
+        val primaryId = settings.primaryDeviceId
+        val statuses = ConcurrentHashMap<String, FolderStatus>()
+        val completions = ConcurrentHashMap<String, CompletionInfo>()
+        val needs = ConcurrentHashMap<String, RemoteNeed>()
         val remaining = AtomicInteger(ids.size * 2)
-        fun done() { if (remaining.decrementAndGet() == 0) handler.post(onComplete) }
+        fun valid() = accepts(token) && this.api === api && primaryId == settings.primaryDeviceId && ids == activeFolderIds()
+        fun done() {
+            if (remaining.decrementAndGet() == 0) handler.post {
+                if (!accepts(token)) return@post
+                if (!valid()) {
+                    retry()
+                    return@post
+                }
+                freshFolderStatus.clear()
+                freshFolderStatus.putAll(statuses)
+                freshRemoteCompletion.clear()
+                freshRemoteCompletion.putAll(completions)
+                freshRemoteNeed.clear()
+                freshRemoteNeed.putAll(needs)
+                onComplete()
+            }
+        }
         ids.forEach { id ->
-            api.getFreshFolderStatus(id, { status -> freshFolderStatus[id] = status; done() }, {
-                freshFolderStatus.remove(id)
+            api.getFreshFolderStatus(id, { status ->
+                if (valid()) statuses[id] = status
+                done()
+            }, {
                 done()
             })
-            api.getFreshFolderCompletion(id, settings.primaryDeviceId,
+            api.getFreshFolderCompletion(id, primaryId,
                 { completion ->
-                    freshRemoteCompletion[id] = completion
+                    if (!valid()) {
+                        done()
+                        return@getFreshFolderCompletion
+                    }
+                    completions[id] = completion
                     val rawRemotePending = completion.completion < 100 || completion.needBytes > 0.0 ||
                         completion.needItems > 0
                     if (!rawRemotePending) {
-                        freshRemoteNeed[id] = RemoteNeed()
-                        freshRemoteNeedFetchedAt[id] = System.currentTimeMillis()
+                        needs[id] = RemoteNeed()
                         done()
                     } else {
-                        val lastFetch = freshRemoteNeedFetchedAt[id] ?: 0L
-                        if (freshRemoteNeed.containsKey(id) &&
-                            System.currentTimeMillis() - lastFetch < REMOTE_NEED_REFRESH_MS
-                        ) {
-                            done()
-                        } else {
-                            api.getFreshRemoteNeed(id, settings.primaryDeviceId,
-                                { need ->
-                                    freshRemoteNeed[id] = need
-                                    freshRemoteNeedFetchedAt[id] = System.currentTimeMillis()
-                                    done()
-                                },
-                                {
-                                    freshRemoteNeed.remove(id)
-                                    freshRemoteNeedFetchedAt.remove(id)
-                                    done()
-                                })
-                        }
+                        api.getFreshRemoteNeed(id, primaryId,
+                            { need ->
+                                if (valid()) needs[id] = need
+                                done()
+                            },
+                            { done() })
                     }
                 },
                 {
-                    freshRemoteCompletion.remove(id)
-                    freshRemoteNeed.remove(id)
-                    freshRemoteNeedFetchedAt.remove(id)
                     done()
                 })
         }
@@ -335,7 +389,9 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 remoteIgnoredItems = listedIgnored,
             )
         }
-        val next = EsdeSyncStateEvaluator.evaluate(
+        // A failed request must not be replaced by an older aggregate cache to unlock play.
+        val missingFreshData = activeFolderIds().any { !freshFolderStatus.containsKey(it) || !freshRemoteCompletion.containsKey(it) }
+        val evaluated = EsdeSyncStateEvaluator.evaluate(
             EsdeGateInput(
                 configured = settings.isSafeLaunchConfigured(),
                 serviceActive = currentService.currentState == SyncthingService.State.ACTIVE,
@@ -344,6 +400,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 folders = folderHealth,
             )
         )
+        val next = if (missingFreshData && evaluated == EsdeSyncState.READY_TO_PLAY) EsdeSyncState.STARTING else evaluated
         statusDetail = when (next) {
             EsdeSyncState.WAITING_FOR_PRIMARY -> "Primary Sync Device is not reachable."
             EsdeSyncState.SYNCING -> "Synchronizing game data…"
@@ -355,19 +412,31 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     }
 
     private fun launchEsde(offline: Boolean) {
+        if (!journalRepository.state.value.loaded) {
+            statusDetail = "Reading saved synchronization state. Please wait."
+            return
+        }
         val launchIntent = packageManager.getLaunchIntentForPackage(settings.applicationPackage)
         if (launchIntent == null) {
             state = EsdeSyncState.ERROR
             statusDetail = "The selected ES-DE application is not installed."
             return
         }
+        invalidateRequests()
+        if (offline) {
+            updateJournal({ if (it.load() == null) it.begin(settings.activeSessionId, settings.requiredFolderIds()) }) {
+                completeEsdeLaunch(launchIntent, true)
+            }
+        } else completeEsdeLaunch(launchIntent, false)
+    }
+
+    private fun completeEsdeLaunch(launchIntent: Intent, offline: Boolean) {
         settings.offlineOverrideUsed = offline
         settings.esdeWasLaunched = true
         settings.launchTimestamp = System.currentTimeMillis()
         postSyncStarted = false
         if (offline) {
             settings.pendingLocalChanges = true
-            offlineJournal.begin(settings.activeSessionId, settings.requiredFolderIds())
             state = EsdeSyncState.OFFLINE_PLAYING
         } else {
             state = EsdeSyncState.ESDE_RUNNING
@@ -376,6 +445,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     }
 
     private fun beginPostSync() {
+        val token = requests.current
         persistPendingChanges("ES-DE session ended; final synchronization is pending")
         state = EsdeSyncState.EXPORTING_METADATA
         statusDetail = "Closing ES-DE before reading final metadata…"
@@ -388,6 +458,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             return
         }
         coordinator.closeEsdeAfterPlay { closed, message ->
+            if (!accepts(token)) return@closeEsdeAfterPlay
             if (!closed) {
                 state = EsdeSyncState.ERROR
                 statusDetail = message
@@ -402,25 +473,29 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     }
 
     private fun exportAndSyncAfterPlay(coordinator: EsdeSyncCoordinator) {
+        val token = requests.current
         coordinator.exportNow { _ ->
+            if (!accepts(token)) return@exportNow
             statusDetail = "Publishing selected Shared Collections and ES-DE settings…"
             coordinator.publishSharedState { shared ->
+                if (!accepts(token)) return@publishSharedState
                 if (!shared.successful) {
                     state = EsdeSyncState.ERROR
                     statusDetail = shared.errorSummary()
                     persistPendingChanges(statusDetail)
                     EsdeDeferredSyncScheduler.schedule(this)
                 } else {
-                    if (offlineJournal.load() != null &&
+                    if (journalEntry != null &&
                         api?.getRemoteDeviceStatus(settings.primaryDeviceId)?.connected != true
                     ) {
                         state = EsdeSyncState.OFFLINE_CHANGES_PENDING
                         statusDetail = "Offline changes are saved locally. Reconnect to the Primary Sync Device to finish."
-                        offlineJournal.markPending(statusDetail)
+                        val message = statusDetail
+                        updateJournal({ it.markPending(message) })
                         EsdeDeferredSyncScheduler.schedule(this)
                         return@publishSharedState
                     }
-                    offlineJournal.load()?.let { offlineJournal.markReconciling() }
+                    updateJournal({ it.markReconciling() })
                     state = EsdeSyncState.SYNCING_AFTER_PLAY
                     statusDetail = "Synchronizing game data after play…"
                     api?.let { rest -> activeFolderIds().forEach { rest.rescanFolder(it) } }
@@ -435,13 +510,14 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     private fun pollPostSync() {
         refreshFreshGateData { when (val evaluated = evaluateGate()) {
             EsdeSyncState.READY_TO_PLAY -> {
-                state = EsdeSyncState.SAFE_TO_SWITCH
-                statusDetail = "ES-DE is closed and all changes are synchronized. Safe to switch device."
-                settings.pendingLocalChanges = false
-                offlineJournal.clear()
-                EsdeDeferredSyncScheduler.cancel(this)
-                preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_SUCCESSFUL_SYNC, System.currentTimeMillis()).apply()
-                restoreForceState()
+                updateJournal({ it.clear() }) {
+                    state = EsdeSyncState.SAFE_TO_SWITCH
+                    statusDetail = "ES-DE is closed and all changes are synchronized. Safe to switch device."
+                    settings.pendingLocalChanges = false
+                    EsdeDeferredSyncScheduler.cancel(this)
+                    preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_SUCCESSFUL_SYNC, System.currentTimeMillis()).apply()
+                    restoreForceState()
+                }
             }
             EsdeSyncState.ERROR -> {
                 state = EsdeSyncState.ERROR
@@ -457,7 +533,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             else -> {
                 state = EsdeSyncState.SYNCING_AFTER_PLAY
                 if (System.currentTimeMillis() - pollStartedAt <= SYNC_TIMEOUT_MS) {
-                    handler.postDelayed(::pollPostSync, POLL_MS)
+                    handler.postDelayed(::pollPostSync, pollPolicy.nextDelay(evaluated to folderHealth))
                 } else {
                     state = EsdeSyncState.ERROR
                     statusDetail = "Local changes are waiting for synchronization."
@@ -480,7 +556,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         }
         state = EsdeSyncState.RECONCILING_OFFLINE_CHANGES
         statusDetail = "Checking the Primary Sync Device and reconciling pending offline changes…"
-        offlineJournal.markReconciling()
+        updateJournal({ it.markReconciling() })
         activeFolderIds().forEach(api::rescanFolder)
         preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_POST_SYNC, System.currentTimeMillis()).apply()
         pollStartedAt = System.currentTimeMillis()
@@ -494,21 +570,24 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
 
     private fun activeFolderIds(): Set<String> = buildSet {
         addAll(settings.requiredFolderIds())
-        offlineJournal.load()?.folderIds?.let(::addAll)
+        journalEntry?.folderIds?.let(::addAll)
     }
 
     private fun persistPendingChanges(message: String = "") {
-        if (offlineJournal.load() == null) {
-            offlineJournal.begin(settings.activeSessionId.ifBlank { "pending-${System.currentTimeMillis()}" }, activeFolderIds())
-        }
-        offlineJournal.markPending(message)
+        val sessionId = settings.activeSessionId.ifBlank { "pending-${System.currentTimeMillis()}" }
+        val folders = activeFolderIds()
+        updateJournal({ journal ->
+            if (journal.load() == null) journal.begin(sessionId, folders)
+            journal.markPending(message)
+        })
         settings.pendingLocalChanges = true
     }
 
     private fun finishSession() {
+        invalidateRequests()
         restoreForceState()
         settings.clearSession()
-        offlineJournal.clear()
+        // The journal was durably cleared before SAFE_TO_SWITCH was exposed.
         EsdeDeferredSyncScheduler.cancel(this)
         handler.removeCallbacksAndMessages(null)
         preSyncStarted = false
@@ -521,6 +600,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     }
 
     private fun startAgain() {
+        invalidateRequests()
         if (settings.activeSessionId.isNotBlank()) {
             restoreForceState()
             settings.clearSession()
@@ -535,7 +615,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             state = state,
             esdeWasLaunched = settings.esdeWasLaunched,
             pendingLocalChanges = settings.pendingLocalChanges,
-            hasOfflineJournal = offlineJournal.load() != null,
+            hasOfflineJournal = journalEntry != null,
             activeSessionId = settings.activeSessionId,
         )
         if (!allowed) {
@@ -564,7 +644,12 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     }
 
     private fun retry() {
-        handler.removeCallbacksAndMessages(null)
+        invalidateRequests()
+        if (!journalRepository.state.value.loaded) {
+            updateJournal({}) { continueRetry() }
+            return
+        }
+        val token = requests.current
         val currentApi = api
         val foldersById = currentApi?.folders?.associateBy { it.id }.orEmpty()
         val cachedConflicts = folderHealth.filter { it.conflictFiles.isNotEmpty() }
@@ -588,7 +673,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 RefreshedConflicts(health.id, existing, health.conflictFiles.size - existing.size)
             }
             handler.post {
-                if (isFinishing) return@post
+                if (!accepts(token)) return@post
                 refreshed.forEach { result ->
                     currentApi.setDiscoveredConflictFiles(result.folderId, result.existing.toTypedArray())
                 }
@@ -607,7 +692,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     }
 
     private fun continueRetry() {
-        if (!settings.esdeWasLaunched && offlineJournal.load() != null) {
+        if (!settings.esdeWasLaunched && journalEntry != null) {
             beginPendingReconciliation()
             return
         }
@@ -730,9 +815,9 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     }
 
     override fun onDestroy() {
-        handler.removeCallbacksAndMessages(null)
+        invalidateRequests()
         conflictExecutor.shutdownNow()
-        if (isFinishing && settings.activeSessionId.isNotBlank() && offlineJournal.load() == null &&
+        if (isFinishing && settings.activeSessionId.isNotBlank() && journalRepository.state.value.loaded && journalEntry == null &&
             (state == EsdeSyncState.SAFE_TO_SWITCH || state == EsdeSyncState.IDLE)
         ) {
             restoreForceState()
@@ -743,7 +828,8 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
 
     @Composable
     private fun SafeLaunchScreen() {
-        val hasPendingChanges = offlineJournal.load() != null || settings.pendingLocalChanges
+        val journalSnapshot by journalRepository.state.collectAsState()
+        val hasPendingChanges = !journalSnapshot.loaded || journalSnapshot.entry != null || settings.pendingLocalChanges
         Column(
             modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).verticalScroll(rememberScrollState())
                 .padding(horizontal = 28.dp, vertical = 24.dp),
@@ -1201,7 +1287,6 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         private const val RETURN_FLUSH_MS = 1000L
         private const val SETTINGS_RETURN_DELAY_MS = 700L
         private const val INITIAL_SCAN_DELAY_MS = 1000L
-        private const val REMOTE_NEED_REFRESH_MS = 5000L
         private const val POLL_MS = 1500L
         private const val SYNC_TIMEOUT_MS = 120_000L
         private const val BOOTSTRAP_DISCOVERY_ATTEMPTS = 4

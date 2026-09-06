@@ -1,38 +1,6 @@
 package com.nutomic.syncthingandroid.esdesync
 
-import android.content.Context
-import android.os.Handler
-import android.os.Looper
 import java.io.File
-import java.util.concurrent.Executors
-
-object EsdeLegacyGamelistConfigurator {
-    private val executor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "ESDESync-LegacyConfig")
-    }
-    private val mainHandler = Handler(Looper.getMainLooper())
-
-    fun ensure(
-        context: Context,
-        settings: EsdeSyncSettings,
-        callback: (Boolean, String) -> Unit = { _, _ -> },
-    ) {
-        val appContext = context.applicationContext
-        executor.execute {
-            val result = runCatching {
-                ensureRequiredEsdeSettingsBlocking(
-                    appFilesDirectory = appContext.filesDir,
-                    esdeDirectory = settings.esdeDirectory,
-                    legacyLocationRequired = settings.usesLegacyGamelistLocation(),
-                )
-            }
-            mainHandler.post {
-                callback(result.isSuccess, result.getOrElse { it.message ?: "Unknown ES-DE settings error" })
-            }
-        }
-    }
-
-}
 
 internal fun ensureRequiredEsdeSettingsBlocking(
     appFilesDirectory: File,

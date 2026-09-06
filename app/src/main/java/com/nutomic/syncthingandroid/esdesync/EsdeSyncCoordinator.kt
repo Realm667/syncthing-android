@@ -8,7 +8,8 @@ import android.util.Log
 import com.google.gson.Gson
 import com.nutomic.syncthingandroid.service.RestApi
 import java.io.File
-import java.util.concurrent.ExecutorService
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.Executors
 
 class EsdeSyncCoordinator(
@@ -18,19 +19,34 @@ class EsdeSyncCoordinator(
 ) {
     private val appContext = context.applicationContext
     private val settings = EsdeSyncSettings(preferences)
-    private val executor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+    private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "ESDESync-Coordinator")
     }
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val diagnosticsCache = EsdeDiagnosticsCache()
     private val bridge = EsdeMetadataBridge(
         EsdeGamelistParser(),
         EsdeSidecarStore(Gson()),
         EsdeSnapshotStore(File(appContext.filesDir, "esde-sync/snapshots")),
         EsdeBackupManager(File(appContext.filesDir, "esde-sync/backups")),
+        diagnosticsCache::put,
     )
     @Volatile private var observer: EsdeFileObserver? = null
     @Volatile private var stopped = false
     @Volatile private var diagnostics = EsdeDiagnostics()
+    private val remoteImports = EsdeCoalescingQueue<File>(
+        schedule = { work -> executor.schedule({ work() }, 900, TimeUnit.MILLISECONDS) },
+        action = { system ->
+            if (settings.enabled && !stopped && isInsideGamelists(system)) {
+                if (!settings.bootstrapComplete) settings.bootstrapPendingImport = true
+                else if (!settings.esdeWasLaunched) runCatching {
+                    requireEsdeStopped()
+                    importSystemInternal(system)
+                    refreshDiagnostics(full = false)
+                }.onFailure { recordError("Deferred remote metadata import", it) }
+            }
+        },
+    )
     private val preferenceListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         when (key) {
             EsdeSyncSettings.PREF_ENABLED -> if (settings.enabled) start() else stopObserver()
@@ -74,6 +90,7 @@ class EsdeSyncCoordinator(
 
     fun stop() {
         stopped = true
+        remoteImports.close()
         observer?.stop()
         observer = null
         preferences.unregisterOnSharedPreferenceChangeListener(preferenceListener)
@@ -81,22 +98,12 @@ class EsdeSyncCoordinator(
     }
 
     fun onRemoteSidecarChanged(fullPath: String) {
-        if (!settings.enabled || !fullPath.replace('\\', '/').contains("/.esde-sync/") ||
+        if (stopped || !settings.enabled || !fullPath.replace('\\', '/').contains("/.esde-sync/") ||
             !fullPath.endsWith(EsdeSidecarStore.SIDECAR_SUFFIX)) return
-        executor.execute {
-            if (!settings.bootstrapComplete) {
-                settings.bootstrapPendingImport = true
-                return@execute
-            }
-            if (settings.esdeWasLaunched) return@execute // Safe Launch imports after the current play session.
-            val file = File(fullPath)
-            val system = generateSequence(file.parentFile) { it.parentFile }
-                .firstOrNull { it.name == EsdeSidecarStore.SIDECAR_DIRECTORY }?.parentFile
-            if (system != null && isInsideGamelists(system)) runCatching {
-                requireEsdeStopped()
-                importSystemInternal(system)
-            }.onFailure { recordError("Deferred remote metadata import", it) }
-        }
+        // Lexical grouping only. Canonical root checks and all file access stay on the worker.
+        val system = generateSequence(File(fullPath).parentFile) { it.parentFile }
+            .firstOrNull { it.name == EsdeSidecarStore.SIDECAR_DIRECTORY }?.parentFile ?: return
+        remoteImports.submit(system.absoluteFile)
     }
 
     fun importNow(finalizeBootstrap: Boolean = false, callback: (EsdeImportResult) -> Unit = {}) {
@@ -267,9 +274,16 @@ class EsdeSyncCoordinator(
     }
 
     fun ensureLegacyGamelistLocation(callback: (Boolean, String) -> Unit = { _, _ -> }) {
-        EsdeLegacyGamelistConfigurator.ensure(appContext, settings) { success, message ->
-            if (!success) recordError("Could not configure ES-DE ROM gamelists", IllegalStateException(message))
-            callback(success, message)
+        executor.execute {
+            val result = runCatching {
+                requireEsdeStopped()
+                ensureRequiredEsdeSettingsBlocking(appContext.filesDir, settings.esdeDirectory,
+                    settings.usesLegacyGamelistLocation())
+            }
+            result.exceptionOrNull()?.let { recordError("Could not configure ES-DE ROM gamelists", it) }
+            mainHandler.post {
+                callback(result.isSuccess, result.getOrElse { it.message ?: "Unknown ES-DE settings error" })
+            }
         }
     }
 
@@ -295,11 +309,12 @@ class EsdeSyncCoordinator(
             )
         }
         preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_IMPORT, System.currentTimeMillis()).apply()
-        refreshDiagnostics()
+        refreshDiagnostics(full = false)
         return result
     }
 
     private fun importSystemInternal(system: File): EsdeImportResult {
+        diagnosticsCache.invalidate(system)
         val result = bridge.importSystem(system)
         if (result.changedGames > 0) settings.pendingLocalChanges = true
         return result
@@ -308,12 +323,13 @@ class EsdeSyncCoordinator(
     private fun exportAllInternal(full: Boolean): EsdeExportResult {
         var result = EsdeExportResult()
         systemDirectories().forEach { system ->
+            diagnosticsCache.invalidate(system)
             val next = bridge.exportSystem(system, full)
             result = EsdeExportResult(result.gamesRead + next.gamesRead, result.sidecarsWritten + next.sidecarsWritten)
         }
         if (result.sidecarsWritten > 0) settings.pendingLocalChanges = true
         preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_EXPORT, System.currentTimeMillis()).apply()
-        refreshDiagnostics()
+        refreshDiagnostics(full = false)
         return result
     }
 
@@ -323,11 +339,14 @@ class EsdeSyncCoordinator(
         observer = EsdeFileObserver(gamelists) { gamelist ->
             executor.execute {
                 runCatching {
-                    gamelist.parentFile?.let { bridge.exportSystem(it) } ?: EsdeExportResult()
+                    gamelist.parentFile?.let {
+                        diagnosticsCache.invalidate(it)
+                        bridge.exportSystem(it)
+                    } ?: EsdeExportResult()
                 }
                     .onSuccess { if (it.sidecarsWritten > 0) settings.pendingLocalChanges = true }
                     .onFailure { recordError("Observed export failed", it) }
-                refreshDiagnostics()
+                refreshDiagnostics(full = false)
             }
         }.also { it.start() }
     }
@@ -351,30 +370,22 @@ class EsdeSyncCoordinator(
         EsdeGamelistLocator(gamelistsDirectory()).contains(file)
     }.getOrDefault(false)
 
-    private fun refreshDiagnostics() {
+    private fun refreshDiagnostics(full: Boolean = true) {
         val systems = systemDirectories()
-        var total = 0
-        var invalid = 0
-        var matched = 0
-        var unmatched = 0
         val parser = EsdeGamelistParser()
         val store = EsdeSidecarStore()
-        systems.forEach { system ->
+        val counts = diagnosticsCache.refresh(systems, full) { system ->
             val local: Set<String> = runCatching {
                 parser.parse(File(system, EsdeMetadataBridge.GAMELIST)).keys.toSet()
             }.getOrDefault(emptySet())
-            val scan = store.scan(system)
-            total += scan.total
-            invalid += scan.invalid
-            matched += scan.states.keys.count { it in local }
-            unmatched += scan.states.keys.count { it !in local }
+            EsdeSystemDiagnostics.from(local, store.scan(system))
         }
         diagnostics = diagnostics.copy(
-            systemsFound = systems.size,
-            sidecarsTotal = total,
-            matched = matched,
-            unmatched = unmatched,
-            invalid = invalid,
+            systemsFound = counts.systemsFound,
+            sidecarsTotal = counts.sidecarsTotal,
+            matched = counts.matched,
+            unmatched = counts.unmatched,
+            invalid = counts.invalid,
             pendingLocalChanges = settings.pendingLocalChanges,
             observerRunning = observer?.isRunning == true,
         )

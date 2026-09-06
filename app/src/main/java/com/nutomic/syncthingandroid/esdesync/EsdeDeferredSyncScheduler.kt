@@ -65,13 +65,26 @@ object EsdeDeferredSyncScheduler {
 }
 
 class EsdeDeferredSyncJobService : JobService() {
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var jobGeneration = 0
     override fun onStartJob(params: JobParameters?): Boolean {
-        val journal = EsdeOfflineJournal(java.io.File(filesDir, "esde-sync/offline-journal.json"))
-        if (journal.load() == null) return false
-        ContextCompat.startForegroundService(this, Intent(this, SyncthingService::class.java))
-        EsdeDeferredSyncScheduler.notifyReady(this)
-        return false
+        val generation = ++jobGeneration
+        EsdeOfflineJournalRepository.get(java.io.File(filesDir, "esde-sync/offline-journal.json"))
+            .update({}) { result ->
+                handler.post {
+                    if (generation != jobGeneration) return@post
+                    if (result.getOrNull() != null) {
+                        ContextCompat.startForegroundService(this, Intent(this, SyncthingService::class.java))
+                        EsdeDeferredSyncScheduler.notifyReady(this)
+                    }
+                    jobFinished(params, result.isFailure)
+                }
+            }
+        return true
     }
 
-    override fun onStopJob(params: JobParameters?): Boolean = true
+    override fun onStopJob(params: JobParameters?): Boolean {
+        jobGeneration++
+        return true
+    }
 }

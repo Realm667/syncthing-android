@@ -9,6 +9,25 @@ import java.io.File
 class EsdeMetadataBridgeTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun unchangedSnapshotsAreNotRewrittenAndPartialImportsDoNotCreateBackups() {
+        val system = temporary.newFolder("snes")
+        File(system, "gamelist.xml").writeText(xml(false, 13))
+        val snapshotRoot = temporary.newFolder("snapshots")
+        val backupRoot = temporary.newFolder("backups")
+        val bridge = EsdeMetadataBridge(EsdeGamelistParser(), EsdeSidecarStore(),
+            EsdeSnapshotStore(snapshotRoot), EsdeBackupManager(backupRoot))
+        bridge.exportSystem(system, full = true)
+        val snapshot = File(snapshotRoot, "snes.json")
+        org.junit.Assert.assertTrue(snapshot.setLastModified(1_000_000L))
+        val unchangedTime = snapshot.lastModified()
+        bridge.exportSystem(system)
+        assertEquals(unchangedTime, snapshot.lastModified())
+        EsdeSidecarStore().write(system, "./Chrono Trigger.sfc", EsdeMetadata(favorite = false))
+        assertEquals(0, bridge.importSystem(system).changedGames)
+        assertEquals(unchangedTime, snapshot.lastModified())
+        org.junit.Assert.assertTrue(backupRoot.listFiles().orEmpty().isEmpty())
+    }
+
     @Test fun exportWritesOnlyChangedGamesAndImportDoesNotFeedBack() {
         val system = temporary.newFolder("snes")
         val gamelist = File(system, "gamelist.xml")

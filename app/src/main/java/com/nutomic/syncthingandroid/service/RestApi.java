@@ -293,6 +293,7 @@ public class RestApi {
             throw new RuntimeException("config is null: " + configResult);
         }
         Log.d(TAG, "onReloadConfigComplete: Successfully parsed configuration.");
+        mOnConfigChangedListener.onConfigChanged();
 
         synchronized (mConfigLock) {
             String logRemoteIgnoredDevices = mGson.toJson(mConfig.remoteIgnoredDevices);

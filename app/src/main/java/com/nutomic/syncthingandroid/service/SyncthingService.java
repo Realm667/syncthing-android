@@ -573,7 +573,7 @@ public class SyncthingService extends Service {
 
         if (mRestApi == null) {
             mRestApi = new RestApi(this, mConfig.getWebGuiUrl(), mConfig.getApiKey(),
-                    this::onApiAvailable, () -> onServiceStateChange(mCurrentState));
+                    this::onApiAvailable, this::publishEsdeReadiness);
             Log.i(TAG, "Web GUI will be available at " + mConfig.getWebGuiUrl());
         }
 
@@ -645,6 +645,7 @@ public class SyncthingService extends Service {
             mEventProcessor = new EventProcessor(SyncthingService.this, mRestApi, mEsdeSyncCoordinator);
             mEventProcessor.start();
         }
+        publishEsdeReadiness();
     }
 
     @Override
@@ -793,6 +794,7 @@ public class SyncthingService extends Service {
         }
         Log.i(TAG, "onServiceStateChange: from " + mCurrentState + " to " + newState);
         mCurrentState = newState;
+        publishEsdeReadiness();
         mHandler.post(() -> {
             mNotificationHandler.updatePersistentNotification(this);
             Iterator<OnServiceStateChangeListener> it = mOnServiceStateChangeListeners.iterator();
@@ -809,6 +811,18 @@ public class SyncthingService extends Service {
 
     public State getCurrentState() {
         return mCurrentState;
+    }
+
+    private final com.nutomic.syncthingandroid.esdesync.EsdeServiceReadiness mEsdeReadiness =
+            new com.nutomic.syncthingandroid.esdesync.EsdeServiceReadiness();
+
+    public com.nutomic.syncthingandroid.esdesync.EsdeServiceReadiness getEsdeReadiness() {
+        return mEsdeReadiness;
+    }
+
+    private void publishEsdeReadiness() {
+        mEsdeReadiness.publish(mCurrentState == State.ACTIVE && mRestApi != null,
+                mCurrentState == State.ACTIVE && mEsdeSyncCoordinator != null);
     }
 
     public NotificationHandler getNotificationHandler() {

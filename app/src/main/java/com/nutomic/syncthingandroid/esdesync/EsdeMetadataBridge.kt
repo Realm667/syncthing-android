@@ -7,6 +7,7 @@ class EsdeMetadataBridge(
     private val sidecars: EsdeSidecarStore,
     private val snapshots: EsdeSnapshotStore,
     private val backups: EsdeBackupManager,
+    private val onInspected: (File, EsdeSystemDiagnostics) -> Unit = { _, _ -> },
 ) {
     fun exportSystem(systemDirectory: File, full: Boolean = false): EsdeExportResult {
         val gamelist = File(systemDirectory, GAMELIST)
@@ -17,7 +18,8 @@ class EsdeMetadataBridge(
         current.forEach { (path, metadata) ->
             if ((full || previous[path] != metadata) && sidecars.write(systemDirectory, path, metadata)) writes++
         }
-        snapshots.save(systemDirectory.name, current)
+        if (previous != current) snapshots.save(systemDirectory.name, current)
+        onInspected(systemDirectory, EsdeSystemDiagnostics.from(current.keys, sidecars.scan(systemDirectory)))
         return EsdeExportResult(current.size, writes)
     }
 
@@ -25,14 +27,16 @@ class EsdeMetadataBridge(
         val gamelist = File(systemDirectory, GAMELIST)
         if (!gamelist.isFile) return EsdeImportResult()
         val scan = sidecars.scan(systemDirectory)
-        if (scan.states.isEmpty()) return EsdeImportResult(invalid = scan.invalid)
-        val local = parser.parse(gamelist)
-        val matchedValues = scan.states.filterKeys { it in local }
-        if (matchedValues.any { (path, value) -> value != local[path] }) {
+        if (scan.states.isEmpty()) {
+            onInspected(systemDirectory, EsdeSystemDiagnostics.from(emptySet(), scan))
+            return EsdeImportResult(invalid = scan.invalid)
+        }
+        val snapshot = parser.applyWithSnapshot(gamelist, scan.states) {
             backups.backupOnce(systemDirectory.name, gamelist)
         }
-        val applied = parser.apply(gamelist, scan.states)
-        snapshots.save(systemDirectory.name, parser.parse(gamelist))
+        val applied = snapshot.result
+        snapshots.save(systemDirectory.name, snapshot.metadata)
+        onInspected(systemDirectory, EsdeSystemDiagnostics.from(snapshot.metadata.keys, scan))
         return EsdeImportResult(applied.matched, applied.unmatched, scan.invalid, applied.changed)
     }
 
