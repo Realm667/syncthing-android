@@ -17,16 +17,18 @@ class EsdeFileObserver(
     }
     private val observers = ConcurrentHashMap<String, FileObserver>()
     private val pending = ConcurrentHashMap<String, ScheduledFuture<*>>()
+    @Volatile private var stopped = false
 
     val isRunning: Boolean get() = observers.isNotEmpty()
 
-    fun start() {
-        if (!gamelistsDirectory.isDirectory) return
+    @Synchronized fun start() {
+        if (stopped || !gamelistsDirectory.isDirectory) return
         observeDirectory(gamelistsDirectory, true)
         refreshSystems()
     }
 
-    fun stop() {
+    @Synchronized fun stop() {
+        stopped = true
         observers.values.forEach { it.stopWatching() }
         observers.clear()
         pending.values.forEach { it.cancel(false) }
@@ -34,8 +36,13 @@ class EsdeFileObserver(
         scheduler.shutdownNow()
     }
 
-    private fun refreshSystems() {
-        gamelistsDirectory.listFiles { file -> file.isDirectory }?.forEach { observeDirectory(it, false) }
+    @Synchronized private fun refreshSystems() {
+        if (stopped) return
+        val directories = gamelistsDirectory.listFiles { file -> file.isDirectory &&
+            file.canonicalFile == File(gamelistsDirectory.canonicalFile, file.name) }.orEmpty()
+        val active = directories.mapTo(mutableSetOf(gamelistsDirectory.absolutePath)) { it.absolutePath }
+        observers.keys.filter { it !in active }.forEach { observers.remove(it)?.stopWatching() }
+        directories.forEach { observeDirectory(it, false) }
     }
 
     private fun observeDirectory(directory: File, root: Boolean) {
@@ -44,6 +51,7 @@ class EsdeFileObserver(
             FileObserver.DELETE_SELF or FileObserver.MOVE_SELF
         val observer = object : FileObserver(directory.absolutePath, mask) {
             override fun onEvent(event: Int, path: String?) {
+                if (stopped) return
                 if (root) {
                     if (event and (FileObserver.CREATE or FileObserver.MOVED_TO) != 0) refreshSystems()
                     return
@@ -57,12 +65,13 @@ class EsdeFileObserver(
         observer.startWatching()
     }
 
-    private fun debounce(gamelist: File) {
+    @Synchronized private fun debounce(gamelist: File) {
+        if (stopped) return
         val key = gamelist.absolutePath
         pending.remove(key)?.cancel(false)
         pending[key] = scheduler.schedule({
             pending.remove(key)
-            if (gamelist.isFile) onGamelistChanged(gamelist)
+            if (!stopped && gamelist.isFile) onGamelistChanged(gamelist)
         }, DEBOUNCE_MS, TimeUnit.MILLISECONDS)
     }
 

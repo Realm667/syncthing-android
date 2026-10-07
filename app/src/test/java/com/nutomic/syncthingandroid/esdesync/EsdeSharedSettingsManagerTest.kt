@@ -114,6 +114,41 @@ class EsdeSharedSettingsManagerTest {
         assertEquals(2, result.skipped)
     }
 
+    @Test fun unavailableThemeRemainsNonBlockingDuringPublishRoundTrip() {
+        val fixture = fixture("<string name=\"Theme\" value=\"local-theme\" />")
+        val shared = """{"schemaVersion":1,"settings":{"Theme":{"type":"string","value":"not-installed"}}}"""
+        fixture.profile.writeText(shared)
+        assertTrue(fixture.manager.importSelected(setOf("Theme")).successful)
+        assertTrue(fixture.manager.publish(setOf("Theme")).successful)
+        assertEquals(shared, fixture.profile.readText())
+    }
+
+    @Test fun oneSidedLocalChangePublishesWithoutFalseConflict() {
+        val fixture = fixture("<bool name=\"DisplayClock\" value=\"false\" />")
+        assertTrue(fixture.manager.publish(setOf("DisplayClock"), allowInitialize = true).successful)
+        fixture.settings.writeText("<bool name=\"DisplayClock\" value=\"true\" />")
+        assertTrue(fixture.manager.importSelected(setOf("DisplayClock")).successful)
+        assertEquals("true", EsdeSettingsEditor().read(fixture.settings, setOf("DisplayClock"))["DisplayClock"]?.value)
+        assertEquals(1, fixture.manager.publish(setOf("DisplayClock")).applied)
+    }
+
+    @Test fun logicalConflictShowsBothValuesAndRejectsStaleDecision() {
+        val fixture = fixture("<string name=\"StartupSystem\" value=\"snes\" />")
+        val selected = setOf("StartupSystem")
+        assertTrue(fixture.manager.publish(selected, allowInitialize = true).successful)
+        fixture.settings.writeText("<string name=\"StartupSystem\" value=\"nes\" />")
+        fixture.profile.writeText("""{"schemaVersion":1,"settings":{"StartupSystem":{"type":"string","value":"gba"}}}""")
+        val decision = fixture.manager.importSelected(selected).decisions.single()
+        assertEquals("nes", decision.localValue)
+        assertEquals("gba", decision.sharedValue)
+        fixture.settings.writeText("<string name=\"StartupSystem\" value=\"gb\" />")
+        assertThrows(IllegalArgumentException::class.java) { fixture.manager.resolveConflict(decision, true) }
+        val refreshed = fixture.manager.importSelected(selected).decisions.single()
+        fixture.manager.resolveConflict(refreshed, true)
+        assertEquals("gba", EsdeSettingsEditor().read(fixture.settings, selected)["StartupSystem"]?.value)
+        assertTrue(fixture.manager.importSelected(selected).successful)
+    }
+
     @Test fun firstTimeImportAdoptsExistingSharedProfileInsteadOfDeviceDefaults() {
         val fixture = fixture("<bool name=\"DisplayClock\" value=\"false\" />")
         fixture.profile.writeText("""{"schemaVersion":1,"settings":{"DisplayClock":{"type":"bool","value":true}}}""")

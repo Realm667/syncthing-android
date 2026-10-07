@@ -66,25 +66,47 @@ jobs:
 
       - name: Sign multiple release APK
         if: ${{ inputs.buildType == 'release' && !inputs.usePublicTestKey }}
+        env:
+          SIGNING_KEYSTORE_JKS_BASE64: ${{ secrets.SIGNING_KEYSTORE_JKS_BASE64 }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+          SIGNING_LEGACY_KEYSTORE_BASE64: ${{ secrets.SIGNING_LEGACY_KEYSTORE_BASE64 }}
+          SIGNING_LINEAGE_BASE64: ${{ secrets.SIGNING_LINEAGE_BASE64 }}
+          SIGNING_CERT_SHA256: ${{ vars.SIGNING_CERT_SHA256 }}
         run: |
-          set -eu
+          set -euo pipefail
           shopt -s nullglob
-          mkdir -p "${{ runner.temp }}/.android"
-          echo "${{ secrets.SIGNING_KEYSTORE_JKS_BASE64 }}" | base64 -d > "${{ runner.temp }}/.android/signing-keystore.jks"
-          #
+          : "${SIGNING_KEYSTORE_JKS_BASE64:?Missing private release keystore}"
+          : "${SIGNING_PASSWORD:?Missing private release password}"
+          : "${SIGNING_LEGACY_KEYSTORE_BASE64:?Missing legacy signer for compatible updates}"
+          : "${SIGNING_LINEAGE_BASE64:?Missing verified signing lineage}"
+          : "${SIGNING_CERT_SHA256:?Missing pinned private certificate fingerprint}"
+          # Use the modern SDK signer, not the older distribution package.
+          SIGNER=$(find "${ANDROID_HOME}/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+          test -x "$SIGNER"
+          umask 077
+          SIGNING_DIR=$(mktemp -d "${RUNNER_TEMP}/safesync-signing.XXXXXX")
+          trap 'rm -f "$SIGNING_DIR/private.jks" "$SIGNING_DIR/legacy.jks" "$SIGNING_DIR/lineage" "$SIGNING_DIR/certificate.der"; rmdir "$SIGNING_DIR"' EXIT
+          printf '%s' "$SIGNING_KEYSTORE_JKS_BASE64" | base64 -d > "$SIGNING_DIR/private.jks"
+          printf '%s' "$SIGNING_LEGACY_KEYSTORE_BASE64" | base64 -d > "$SIGNING_DIR/legacy.jks"
+          printf '%s' "$SIGNING_LINEAGE_BASE64" | base64 -d > "$SIGNING_DIR/lineage"
+          keytool -exportcert -keystore "$SIGNING_DIR/private.jks" -alias Syncthing-Fork \
+            -storepass:env SIGNING_PASSWORD -file "$SIGNING_DIR/certificate.der"
+          ACTUAL_CERT=$(sha256sum "$SIGNING_DIR/certificate.der" | cut -d ' ' -f 1)
+          test "$ACTUAL_CERT" = "${SIGNING_CERT_SHA256,,}"
+          APKS=(unsigned/*/*.apk)
+          test "${#APKS[@]}" -gt 0
           for UNSIGNED_APK in unsigned/*/*.apk; do
             SIGNED_APK="$(basename -- "${UNSIGNED_APK}")"
             echo "Signing ${UNSIGNED_APK}"
-            # --alignment-preserved
-            apksigner sign \
-              --ks "${{ runner.temp }}/.android/signing-keystore.jks" \
-              --ks-pass pass:'${{ secrets.SIGNING_PASSWORD }}' \
-              --key-pass pass:'${{ secrets.SIGNING_PASSWORD }}' \
+            "$SIGNER" sign --lineage "$SIGNING_DIR/lineage" --rotation-min-sdk-version 28 \
+              --ks "$SIGNING_DIR/legacy.jks" --ks-key-alias androiddebugkey \
+              --ks-pass pass:android --key-pass pass:android \
+              --next-signer --ks "$SIGNING_DIR/private.jks" \
+              --ks-pass env:SIGNING_PASSWORD --key-pass env:SIGNING_PASSWORD \
               --ks-key-alias Syncthing-Fork \
               --out "${SIGNED_APK}" "${UNSIGNED_APK}"
+            "$SIGNER" verify --verbose --print-certs "${SIGNED_APK}"
           done
-          #
-          rm -f "${{ runner.temp }}/.android/signing-keystore.jks"
 
       - name: Upload signed artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

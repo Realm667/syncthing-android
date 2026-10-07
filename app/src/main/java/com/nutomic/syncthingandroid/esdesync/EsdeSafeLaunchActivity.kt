@@ -75,13 +75,54 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     private var postSyncStarted = false
     private var legacyConfigurationChecked = false
     private var sharedWarning by mutableStateOf("")
+    private var valueConflicts by mutableStateOf<List<EsdeValueConflict>>(emptyList())
+    private var decidingValue by mutableStateOf<EsdeValueConflict?>(null)
     private var bootstrapDiscoveryAttempts = 0
-    private var pollStartedAt = 0L
     private val freshFolderStatus = ConcurrentHashMap<String, FolderStatus>()
     private val freshRemoteCompletion = ConcurrentHashMap<String, CompletionInfo>()
     private val freshRemoteNeed = ConcurrentHashMap<String, RemoteNeed>()
     private val requests = EsdeRequestGeneration()
     private val pollPolicy = EsdePollPolicy()
+    private val progressWatchdog = EsdeProgressWatchdog()
+    private val transferMeter = EsdeTransferMeter()
+    private var transferLabel by mutableStateOf("Measuring transfer speed…")
+    private val transferHandler = Handler(android.os.Looper.getMainLooper())
+    private var transferGeneration = 0L
+    private val transferTick = object : Runnable {
+        override fun run() {
+            if (state !in TRANSFER_STATES) {
+                transferMeter.reset()
+                transferHandler.postDelayed(this, 1000)
+                return
+            }
+            val currentApi = api
+            if (currentApi == null) {
+                transferLabel = "Transfer unavailable · waiting for Syncthing"
+                transferHandler.postDelayed(this, 1000)
+                return
+            }
+            val token = requests.current
+            val generation = transferGeneration
+            currentApi.getFreshTransferCounters({ connections ->
+                if (generation != transferGeneration) return@getFreshTransferCounters
+                if (accepts(token) && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                    val total = connections?.total
+                    val rate = total?.let { transferMeter.sample(it.inBytesTotal, it.outBytesTotal, android.os.SystemClock.elapsedRealtime()) }
+                    transferLabel = if (rate == null) "Measuring transfer speed…" else
+                        "Syncthing total · ↓ ${formatRate(rate.download)} · ↑ ${formatRate(rate.upload)}" +
+                            if (rate.download == 0.0 && rate.upload == 0.0) " · checking or waiting" else ""
+                }
+                if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) transferHandler.postDelayed(this, 1000)
+            }, {
+                if (generation != transferGeneration) return@getFreshTransferCounters
+                if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                    transferMeter.reset()
+                    transferLabel = "Transfer unavailable · waiting for Syncthing"
+                    transferHandler.postDelayed(this, 1000)
+                }
+            })
+        }
+    }
 
     private fun accepts(token: Long): Boolean = requests.accepts(token) && !isFinishing && !isDestroyed
 
@@ -92,6 +133,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         freshRemoteCompletion.clear()
         freshRemoteNeed.clear()
         pollPolicy.reset()
+        progressWatchdog.reset()
     }
     private val conflictExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "ESDESync-ConflictResolver")
@@ -141,6 +183,9 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
 
     override fun onResume() {
         super.onResume()
+        transferGeneration++
+        transferHandler.removeCallbacksAndMessages(null)
+        transferHandler.post(transferTick)
         // Only an Activity resume can end a play session. A late service/journal callback cannot.
         if (settings.esdeWasLaunched && settings.launchTimestamp > 0 && !postSyncStarted) {
             postSyncStarted = true
@@ -148,6 +193,13 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 handler.postDelayed({ beginPostSync() }, RETURN_FLUSH_MS)
             }
         } else resumeSyncWhenReady()
+    }
+
+    override fun onPause() {
+        transferGeneration++
+        transferHandler.removeCallbacksAndMessages(null)
+        transferMeter.reset()
+        super.onPause()
     }
 
     private fun resumeSyncWhenReady() {
@@ -225,10 +277,8 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         }
         state = EsdeSyncState.RESCANNING
         statusDetail = "Refreshing selected gaming folders…"
-        activeFolderIds().forEach { api.rescanFolder(it) }
         preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_PRE_SYNC, System.currentTimeMillis()).apply()
-        pollStartedAt = System.currentTimeMillis()
-        handler.postDelayed(::pollPreSync, INITIAL_SCAN_DELAY_MS)
+        rescanSelected { pollPreSync() }
     }
 
     private fun beginPreSyncRetry() {
@@ -245,22 +295,28 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 state = EsdeSyncState.IMPORTING_METADATA
                 statusDetail = "Applying Shared Collections and ES-DE settings…"
                 val coordinator = service?.esdeSyncCoordinator
+                val importRevision = coordinator?.currentRemoteRevision()
                 if (coordinator == null) {
                     state = EsdeSyncState.ERROR
                     statusDetail = "Metadata bridge is not available."
                 } else coordinator.importSharedStateBeforeLaunch { shared ->
                     if (!accepts(token)) return@importSharedStateBeforeLaunch
                     if (!shared.successful) {
+                        valueConflicts = shared.collections.decisions + shared.settings.decisions
                         state = EsdeSyncState.ERROR
                         statusDetail = shared.errorSummary()
                     } else {
                         sharedWarning = (shared.collections.warnings + shared.settings.warnings).joinToString("; ")
                         statusDetail = "Applying synchronized per-game metadata…"
-                        coordinator.importNow(finalizeBootstrap = !settings.bootstrapComplete) { metadata ->
+                        coordinator.importNow(finalizeBootstrap = !settings.bootstrapComplete, expectedRevision = importRevision) { metadata ->
                             if (!accepts(token)) return@importNow
                             if (metadata.invalid > 0) {
                                 state = EsdeSyncState.ERROR
-                                statusDetail = "Per-game metadata contains ${metadata.invalid} invalid sidecar(s)."
+                                statusDetail = metadata.errors.joinToString("; ").ifBlank { "Per-game metadata contains ${metadata.invalid} invalid sidecar(s)." }
+                            } else if (settings.bootstrapPendingImport) {
+                                state = EsdeSyncState.SYNCING
+                                statusDetail = "New metadata arrived during import. Checking the latest state…"
+                                handler.postDelayed(::pollPreSync, POLL_MS)
                             } else {
                                 state = EsdeSyncState.READY_TO_PLAY
                                 statusDetail = if (sharedWarning.isBlank()) "Everything is synchronized."
@@ -271,9 +327,8 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 }
                 return@refreshFreshGateData
             }
-            if (System.currentTimeMillis() - pollStartedAt > SYNC_TIMEOUT_MS) {
-                statusDetail = "Synchronization is taking longer than expected. You can retry or start without sync."
-                return@refreshFreshGateData
+            if (progressWatchdog.stalled(evaluated to folderHealth, android.os.SystemClock.elapsedRealtime())) {
+                statusDetail = "No visible progress for two minutes. Still checking; review network and folder details."
             }
             handler.postDelayed(::pollPreSync, pollPolicy.nextDelay(evaluated to folderHealth))
         }
@@ -308,8 +363,16 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         }
         ids.forEach { id ->
             api.getFreshFolderStatus(id, { status ->
-                if (valid()) statuses[id] = status
-                done()
+                if (!valid()) { done(); return@getFreshFolderStatus }
+                conflictExecutor.execute {
+                    if (valid()) {
+                        runCatching {
+                            api.refreshEsdeConflictFiles(id, status)
+                        }.onFailure { status.error = "Conflict check failed: ${it.message}" }
+                        statuses[id] = status
+                    }
+                    done()
+                }
             }, {
                 done()
             })
@@ -412,6 +475,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     }
 
     private fun launchEsde(offline: Boolean) {
+        if (state in setOf(EsdeSyncState.IMPORTING_METADATA, EsdeSyncState.EXPORTING_METADATA, EsdeSyncState.LAUNCHING)) return
         if (!journalRepository.state.value.loaded) {
             statusDetail = "Reading saved synchronization state. Please wait."
             return
@@ -423,11 +487,27 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             return
         }
         invalidateRequests()
-        if (offline) {
-            updateJournal({ if (it.load() == null) it.begin(settings.activeSessionId, settings.requiredFolderIds()) }) {
-                completeEsdeLaunch(launchIntent, true)
+        val token = requests.current
+        fun reserveAndLaunch() {
+            val coordinator = service?.esdeSyncCoordinator ?: run {
+                state = EsdeSyncState.ERROR; statusDetail = "Metadata bridge is unavailable"; return
             }
-        } else completeEsdeLaunch(launchIntent, false)
+            coordinator.prepareLaunch(offline) { success, message ->
+                if (!accepts(token)) {
+                    return@prepareLaunch
+                }
+                if (!success) { state = EsdeSyncState.ERROR; statusDetail = message }
+                else updateJournal({ it.begin(settings.activeSessionId, activeFolderIds()) }) {
+                    completeEsdeLaunch(launchIntent, offline)
+                }
+            }
+        }
+        state = EsdeSyncState.LAUNCHING
+        statusDetail = "Verifying launch readiness…"
+        if (offline) reserveAndLaunch() else refreshFreshGateData {
+            if (evaluateGate() == EsdeSyncState.READY_TO_PLAY && !settings.bootstrapPendingImport) reserveAndLaunch()
+            else { preSyncStarted = false; beginPreSync() }
+        }
     }
 
     private fun completeEsdeLaunch(launchIntent: Intent, offline: Boolean) {
@@ -441,14 +521,17 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         } else {
             state = EsdeSyncState.ESDE_RUNNING
         }
-        startActivity(launchIntent)
+        runCatching { startActivity(launchIntent) }.onFailure {
+            settings.esdeWasLaunched = false
+            state = EsdeSyncState.ERROR
+            statusDetail = "Could not start ES-DE: ${it.message}"
+        }
     }
 
     private fun beginPostSync() {
         val token = requests.current
-        persistPendingChanges("ES-DE session ended; final synchronization is pending")
         state = EsdeSyncState.EXPORTING_METADATA
-        statusDetail = "Closing ES-DE before reading final metadata…"
+        statusDetail = "Verifying ES-DE is closed before reading final metadata…"
         val coordinator = service?.esdeSyncCoordinator
         if (coordinator == null) {
             state = EsdeSyncState.ERROR
@@ -466,57 +549,103 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 EsdeDeferredSyncScheduler.schedule(this)
             } else {
                 statusDetail = message
-                persistPendingChanges()
-                exportAndSyncAfterPlay(coordinator)
+                updateJournal({ journal ->
+                    if (journal.load() == null) journal.begin(settings.activeSessionId, activeFolderIds())
+                    journal.markPending()
+                }) { exportAndSyncAfterPlay(coordinator) }
             }
         }
     }
 
     private fun exportAndSyncAfterPlay(coordinator: EsdeSyncCoordinator) {
         val token = requests.current
-        coordinator.exportNow { _ ->
-            if (!accepts(token)) return@exportNow
-            statusDetail = "Publishing selected Shared Collections and ES-DE settings…"
-            coordinator.publishSharedState { shared ->
-                if (!accepts(token)) return@publishSharedState
-                if (!shared.successful) {
-                    state = EsdeSyncState.ERROR
-                    statusDetail = shared.errorSummary()
-                    persistPendingChanges(statusDetail)
-                    EsdeDeferredSyncScheduler.schedule(this)
-                } else {
-                    if (journalEntry != null &&
-                        api?.getRemoteDeviceStatus(settings.primaryDeviceId)?.connected != true
-                    ) {
-                        state = EsdeSyncState.OFFLINE_CHANGES_PENDING
-                        statusDetail = "Offline changes are saved locally. Reconnect to the Primary Sync Device to finish."
-                        val message = statusDetail
-                        updateJournal({ it.markPending(message) })
-                        EsdeDeferredSyncScheduler.schedule(this)
-                        return@publishSharedState
+        EsdeSessionWorkflow(
+            perform = { step, completed ->
+                if (accepts(token)) when (step) {
+                    EsdeSessionStep.CLOSE_ESDE -> coordinator.closeEsdeAfterPlay { ok, message ->
+                        if (accepts(token)) completed(if (ok) Result.success(Unit) else Result.failure(IllegalStateException(message)))
                     }
-                    updateJournal({ it.markReconciling() })
+                    EsdeSessionStep.EXPORT_METADATA -> {
+                        statusDetail = "Exporting final per-game metadata…"
+                        coordinator.exportNow { result ->
+                            if (accepts(token)) completed(if (result.successful) Result.success(Unit)
+                                else Result.failure(IllegalStateException(result.errors.joinToString("; "))))
+                        }
+                    }
+                    EsdeSessionStep.PUBLISH_SHARED_STATE -> {
+                        statusDetail = "Publishing selected Collections and Settings…"
+                        coordinator.publishSharedState { result ->
+                            if (accepts(token)) valueConflicts = result.collections.decisions + result.settings.decisions
+                            if (accepts(token)) completed(if (result.successful) Result.success(Unit)
+                                else Result.failure(IllegalStateException(result.errorSummary())))
+                        }
+                    }
+                    EsdeSessionStep.SYNC_FILES -> completed(Result.success(Unit))
+                }
+            },
+            checkpoint = { next, continuation -> updateJournal({ it.advance(next) }, continuation) },
+            failed = { message ->
+                state = EsdeSyncState.ERROR
+                statusDetail = message
+                persistPendingChanges(message)
+                EsdeDeferredSyncScheduler.schedule(this)
+            },
+            readyToSync = {
+                updateJournal({ it.markReconciling() }) {
                     state = EsdeSyncState.SYNCING_AFTER_PLAY
                     statusDetail = "Synchronizing game data after play…"
-                    api?.let { rest -> activeFolderIds().forEach { rest.rescanFolder(it) } }
                     preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_POST_SYNC, System.currentTimeMillis()).apply()
-                    pollStartedAt = System.currentTimeMillis()
-                    handler.postDelayed(::pollPostSync, INITIAL_SCAN_DELAY_MS)
+                    rescanSelected { pollPostSync() }
                 }
+            },
+        ).resume(journalEntry?.nextStep ?: EsdeSessionStep.CLOSE_ESDE)
+    }
+
+    private fun rescanSelected(onComplete: () -> Unit) {
+        val rest = api ?: run { state = EsdeSyncState.ERROR; statusDetail = "Syncthing is unavailable. Retry."; return }
+        val ids = activeFolderIds()
+        if (ids.isEmpty()) { state = EsdeSyncState.NOT_CONFIGURED; return }
+        val token = requests.current
+        var remaining = ids.size
+        var failures = 0
+        fun done(ok: Boolean) {
+            if (!accepts(token)) return
+            if (!ok) failures++
+            if (--remaining == 0) {
+                if (failures > 0) {
+                    state = EsdeSyncState.ERROR
+                    statusDetail = "$failures folder scan(s) failed. Retry before playing or switching devices."
+                } else { progressWatchdog.reset(); onComplete() }
             }
         }
+        ids.forEach { rest.rescanFolderVerified(it, { done(true) }, { done(false) }) }
     }
 
     private fun pollPostSync() {
         refreshFreshGateData { when (val evaluated = evaluateGate()) {
             EsdeSyncState.READY_TO_PLAY -> {
-                updateJournal({ it.clear() }) {
+                val token = requests.current
+                val coordinator = service?.esdeSyncCoordinator ?: run {
+                    state = EsdeSyncState.ERROR
+                    statusDetail = "Metadata bridge disconnected; Retry to verify final synchronization."
+                    return@refreshFreshGateData
+                }
+                coordinator.closeEsdeAfterPlay { closed, message ->
+                    if (!accepts(token)) return@closeEsdeAfterPlay
+                    if (!closed) {
+                        state = EsdeSyncState.ERROR
+                        statusDetail = message
+                        updateJournal({ it.advance(EsdeSessionStep.CLOSE_ESDE) })
+                        return@closeEsdeAfterPlay
+                    }
+                    updateJournal({ it.clear() }) {
                     state = EsdeSyncState.SAFE_TO_SWITCH
                     statusDetail = "ES-DE is closed and all changes are synchronized. Safe to switch device."
                     settings.pendingLocalChanges = false
                     EsdeDeferredSyncScheduler.cancel(this)
                     preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_SUCCESSFUL_SYNC, System.currentTimeMillis()).apply()
                     restoreForceState()
+                    }
                 }
             }
             EsdeSyncState.ERROR -> {
@@ -532,14 +661,9 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             }
             else -> {
                 state = EsdeSyncState.SYNCING_AFTER_PLAY
-                if (System.currentTimeMillis() - pollStartedAt <= SYNC_TIMEOUT_MS) {
-                    handler.postDelayed(::pollPostSync, pollPolicy.nextDelay(evaluated to folderHealth))
-                } else {
-                    state = EsdeSyncState.ERROR
-                    statusDetail = "Local changes are waiting for synchronization."
-                    persistPendingChanges(statusDetail)
-                    EsdeDeferredSyncScheduler.schedule(this)
-                }
+                if (progressWatchdog.stalled(evaluated to folderHealth, android.os.SystemClock.elapsedRealtime()))
+                    statusDetail = "No visible progress for two minutes. Still checking pending changes; review network and folders."
+                handler.postDelayed(::pollPostSync, pollPolicy.nextDelay(evaluated to folderHealth))
             }
         } }
     }
@@ -554,13 +678,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             handler.postDelayed({ if (!isFinishing) beginPendingReconciliation() }, POLL_MS)
             return
         }
-        state = EsdeSyncState.RECONCILING_OFFLINE_CHANGES
-        statusDetail = "Checking the Primary Sync Device and reconciling pending offline changes…"
-        updateJournal({ it.markReconciling() })
-        activeFolderIds().forEach(api::rescanFolder)
-        preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_POST_SYNC, System.currentTimeMillis()).apply()
-        pollStartedAt = System.currentTimeMillis()
-        handler.postDelayed(::pollPostSync, INITIAL_SCAN_DELAY_MS)
+        beginPostSync()
     }
 
     private fun restoreForceState() {
@@ -814,7 +932,23 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         startActivity(Intent(this, SettingsActivity::class.java).putExtra(SettingsActivity.EXTRA_START_DESTINATION, "Gaming"))
     }
 
+    private fun openEsdeAppInfo() {
+        if (settings.applicationPackage.isNotBlank()) startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            android.net.Uri.parse("package:${settings.applicationPackage}")))
+    }
+
+    private fun decideSharedValue(conflict: EsdeValueConflict, useShared: Boolean) {
+        decidingValue = null
+        val token = requests.current
+        service?.esdeSyncCoordinator?.resolveSharedConflict(conflict, useShared) { ok, message ->
+            if (!accepts(token)) return@resolveSharedConflict
+            statusDetail = message
+            if (ok) { valueConflicts = valueConflicts - conflict; retry() }
+        }
+    }
+
     override fun onDestroy() {
+        transferHandler.removeCallbacksAndMessages(null)
         invalidateRequests()
         conflictExecutor.shutdownNow()
         if (isFinishing && settings.activeSessionId.isNotBlank() && journalRepository.state.value.loaded && journalEntry == null &&
@@ -851,17 +985,25 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     Text(stateLabel(state), color = stateColor(state), style = MaterialTheme.typography.titleLarge)
                     Text(statusDetail, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
-                    LinearProgressIndicator(
-                        progress = { sessionProgress() },
+                    if (state in setOf(EsdeSyncState.READY_TO_PLAY, EsdeSyncState.SAFE_TO_SWITCH, EsdeSyncState.IDLE)) LinearProgressIndicator(
+                        progress = { 1f },
                         modifier = Modifier.fillMaxWidth().height(10.dp),
                         color = stateColor(state),
                         trackColor = MaterialTheme.colorScheme.surfaceVariant,
                     )
+                    else if (state in TRANSFER_STATES || state in setOf(EsdeSyncState.IMPORTING_METADATA,
+                        EsdeSyncState.EXPORTING_METADATA, EsdeSyncState.LAUNCHING))
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(10.dp), color = stateColor(state))
                     Text(progressLabel(), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    if (state in TRANSFER_STATES) Text(transferLabel, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium)
                 }
             }
             InstructionCard()
             folderHealth.forEach { health -> FolderCard(health) { conflictFolder = health } }
+            valueConflicts.forEach { conflict ->
+                OutlinedButton(onClick = { decidingValue = conflict }) { Text("RESOLVE ${conflict.category.uppercase()}: ${conflict.name}") }
+            }
             if (conflictFeedback.isNotBlank()) {
                 Text(conflictFeedback, color = warningColor(), style = MaterialTheme.typography.bodyMedium)
             }
@@ -913,6 +1055,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                         OutlinedButton(onClick = ::openSyncthing) { Text("OPEN SYNCTHING") }
                     }
                     EsdeSyncState.ERROR -> {
+                        OutlinedButton(onClick = ::openEsdeAppInfo) { Text("OPEN ES-DE APP INFO · FORCE STOP") }
                         OutlinedButton(onClick = ::retry) { Text("RETRY") }
                         OutlinedButton(onClick = ::openSyncthing) { Text("OPEN SYNCTHING") }
                         if (!hasPendingChanges) Button(
@@ -921,7 +1064,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                             ) { Text("START OFFLINE SESSION") }
                     }
                     EsdeSyncState.STARTING, EsdeSyncState.WAITING_FOR_PRIMARY, EsdeSyncState.RESCANNING,
-                    EsdeSyncState.SYNCING, EsdeSyncState.IMPORTING_METADATA -> {
+                    EsdeSyncState.SYNCING -> {
                         OutlinedButton(onClick = ::retry) { Text("RETRY") }
                         Button(
                             onClick = { launchEsde(true) },
@@ -949,6 +1092,17 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
             )
         }
         conflictFolder?.let { ConflictListDialog(it) }
+        decidingValue?.let { conflict ->
+            AlertDialog(onDismissRequest = { decidingValue = null },
+                title = { Text("RESOLVE ${conflict.name}") },
+                text = { Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                    Text("Local: ${conflict.localValue}")
+                    Text("Synchronized: ${conflict.sharedValue}")
+                    Text("The replaced value is backed up. If either value changes, refresh before deciding.")
+                } },
+                confirmButton = { TextButton(onClick = { decideSharedValue(conflict, true) }) { Text("USE SYNCHRONIZED") } },
+                dismissButton = { TextButton(onClick = { decideSharedValue(conflict, false) }) { Text("KEEP LOCAL") } })
+        }
         pendingConflictResolution?.let { ConflictConfirmationDialog(it) }
         if (showPowerOffConfirmation) PowerOffConfirmationDialog()
     }
@@ -987,7 +1141,7 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
                 Text(currentInstruction(), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyLarge)
                 InstructionStep(1, "Start ES-DE from this screen.")
                 InstructionStep(2, "Play, then close the emulator and return to ES-DE.")
-                InstructionStep(3, "Press Home in ES-DE to return; SafeSync then closes ES-DE automatically.")
+                InstructionStep(3, "Press Home to return. When requested, open ES-DE app info, select Force stop, then return and Retry.")
                 InstructionStep(4, "Keep SafeSync open until SAFE TO SWITCH DEVICE appears.")
             }
         }
@@ -1228,32 +1382,14 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
         EsdeSyncState.RECONCILING_OFFLINE_CHANGES -> "VERIFYING · PENDING CHANGES"
         EsdeSyncState.SAFE_TO_SWITCH -> "COMPLETE · SAFE TO SWITCH DEVICE"
         EsdeSyncState.IDLE -> "IDLE · SAFE TO SWITCH DEVICE"
-        else -> "${(sessionProgress() * 100).toInt()}% · ${stateLabel(state)}"
-    }
-
-    private fun sessionProgress(): Float {
-        val folderCompletion = folderHealth.map { it.remoteCompletion.coerceIn(0, 100) }.average()
-            .takeUnless { it.isNaN() }?.div(100.0)?.toFloat() ?: 0f
-        return when (state) {
-            EsdeSyncState.NOT_CONFIGURED, EsdeSyncState.ERROR -> 0f
-            EsdeSyncState.STARTING, EsdeSyncState.WAITING_FOR_PRIMARY -> 0.08f
-            EsdeSyncState.RESCANNING -> 0.14f
-            EsdeSyncState.SYNCING -> 0.14f + folderCompletion * 0.26f
-            EsdeSyncState.IMPORTING_METADATA -> 0.45f
-            EsdeSyncState.READY_TO_PLAY -> 0.5f
-            EsdeSyncState.OFFLINE_PLAYING, EsdeSyncState.ESDE_RUNNING -> 0.55f
-            EsdeSyncState.OFFLINE_CHANGES_PENDING -> 0.62f
-            EsdeSyncState.RECONNECTING -> 0.64f
-            EsdeSyncState.RECONCILING_OFFLINE_CHANGES -> 0.72f + folderCompletion * 0.27f
-            EsdeSyncState.EXPORTING_METADATA -> 0.68f
-            EsdeSyncState.SYNCING_AFTER_PLAY -> 0.72f + folderCompletion * 0.27f
-            EsdeSyncState.SAFE_TO_SWITCH -> 1f
-            EsdeSyncState.IDLE -> 1f
-        }.coerceIn(0f, 1f)
+        else -> stateLabel(state) + folderHealth.takeIf { it.isNotEmpty() }?.let {
+            " · ${it.sumOf { folder -> folder.needTotalItems }} local items pending"
+        }.orEmpty()
     }
 
     private fun stateLabel(value: EsdeSyncState): String = when (value) {
         EsdeSyncState.READY_TO_PLAY -> "SAFE TO PLAY"
+        EsdeSyncState.LAUNCHING -> "VERIFYING LAUNCH"
         EsdeSyncState.SAFE_TO_SWITCH -> "SAFE TO SWITCH DEVICE"
         EsdeSyncState.IDLE -> "IDLE"
         EsdeSyncState.OFFLINE_PLAYING -> "OFFLINE SESSION"
@@ -1281,14 +1417,20 @@ class EsdeSafeLaunchActivity : SyncthingActivity() {
     private fun warningColor(): Color = if (isSystemInDarkTheme()) Color(0xFFD8A657) else Color(0xFF795300)
 
     companion object {
+        private val TRANSFER_STATES = setOf(EsdeSyncState.STARTING, EsdeSyncState.WAITING_FOR_PRIMARY,
+            EsdeSyncState.RESCANNING, EsdeSyncState.SYNCING, EsdeSyncState.SYNCING_AFTER_PLAY,
+            EsdeSyncState.RECONNECTING, EsdeSyncState.RECONCILING_OFFLINE_CHANGES)
+        private fun formatRate(bytes: Double): String = when {
+            bytes >= 1024 * 1024 -> String.format(java.util.Locale.ROOT, "%.1f MiB/s", bytes / (1024 * 1024))
+            bytes >= 1024 -> String.format(java.util.Locale.ROOT, "%.1f KiB/s", bytes / 1024)
+            else -> "${bytes.toLong()} B/s"
+        }
         private val SAFE_GREEN = Color(0xFF74BF6C)
         private val DANGER_RED = Color(0xFF9C001E)
         private val CONFLICT_MARKER = Regex("\\.sync-conflict-(\\d{8})-(\\d{6})-([A-Za-z0-9]+)")
         private const val RETURN_FLUSH_MS = 1000L
         private const val SETTINGS_RETURN_DELAY_MS = 700L
-        private const val INITIAL_SCAN_DELAY_MS = 1000L
         private const val POLL_MS = 1500L
-        private const val SYNC_TIMEOUT_MS = 120_000L
         private const val BOOTSTRAP_DISCOVERY_ATTEMPTS = 4
     }
 

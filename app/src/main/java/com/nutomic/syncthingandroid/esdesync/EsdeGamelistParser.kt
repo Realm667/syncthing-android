@@ -5,9 +5,6 @@ import org.w3c.dom.Element
 import org.w3c.dom.Node
 import java.io.File
 import java.io.OutputStreamWriter
-import java.io.StringReader
-import java.nio.ByteBuffer
-import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
@@ -19,13 +16,66 @@ import org.xml.sax.InputSource
 import org.xml.sax.SAXException
 import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
+import org.xml.sax.Attributes
+import javax.xml.parsers.SAXParserFactory
 
 class EsdeGamelistParser {
     data class ApplyResult(val matched: Int, val unmatched: Int, val changed: Int)
     data class AppliedSnapshot(val result: ApplyResult, val metadata: LinkedHashMap<String, EsdeMetadata>)
 
     fun parse(file: File): LinkedHashMap<String, EsdeMetadata> {
-        return metadataSnapshot(parseDocument(file))
+        val result = LinkedHashMap<String, EsdeMetadata>()
+        val factory = SAXParserFactory.newInstance()
+        runCatching { factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true) }
+        runCatching { factory.setFeature("http://xml.org/sax/features/external-general-entities", false) }
+        runCatching { factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
+        val handler = object : DefaultHandler() {
+            var depth = 0
+            var lists = 0
+            var alternatives = 0
+            var inGame = false
+            var inGameList = false
+            var field: String? = null
+            val values = mutableMapOf<String, String>()
+            val text = StringBuilder()
+            override fun resolveEntity(publicId: String?, systemId: String?): InputSource = throw SAXException("External entities are forbidden")
+            override fun error(error: SAXParseException) = throw error
+            override fun fatalError(error: SAXParseException) = throw error
+            override fun startElement(uri: String?, local: String?, name: String, attributes: Attributes?) {
+                depth++
+                if (depth == 2) when (name) {
+                    "gameList" -> { lists++; inGameList = true }
+                    "alternativeEmulator" -> { alternatives++; inGameList = false }
+                    else -> throw SAXException("Unsupported top-level gamelist element: $name")
+                }
+                if (depth == 3 && inGameList && name == "game") { inGame = true; values.clear() }
+                if (depth == 4 && inGame && name in METADATA_FIELDS) { field = name; text.setLength(0) }
+            }
+            override fun characters(chars: CharArray, start: Int, length: Int) {
+                if (depth == 1) require((start until start + length).all { chars[it].isWhitespace() }) { "Unexpected text outside gameList" }
+                if (field != null) { require(text.length + length <= 4096) { "Metadata field is too large" }; text.append(chars, start, length) }
+            }
+            override fun processingInstruction(target: String?, data: String?) {
+                require(depth != 1) { "Unsupported top-level gamelist node" }
+            }
+            override fun endElement(uri: String?, local: String?, name: String) {
+                if (depth == 4 && field != null) { if (field !in values) values[field!!] = text.toString(); field = null }
+                if (depth == 3 && inGame) {
+                    values["path"]?.let { raw -> runCatching { EsdePathPolicy.normalizeGamePath(raw) }.getOrNull()?.let { path ->
+                        result[path] = metadataFrom { values[it] }
+                    } }
+                    inGame = false
+                }
+                depth--
+            }
+            override fun endDocument() {
+                require(lists == 1 && alternatives <= 1) { "Expected one gameList and at most one alternativeEmulator" }
+            }
+        }
+        EsdeXmlFragmentReader(file, FRAGMENT_ROOT, MAX_GAMELIST_BYTES).use {
+            factory.newSAXParser().parse(InputSource(it), handler)
+        }
+        return result
     }
 
     private fun metadataSnapshot(document: Document): LinkedHashMap<String, EsdeMetadata> {
@@ -73,15 +123,16 @@ class EsdeGamelistParser {
     private fun Element.children(): List<Element> = (0 until childNodes.length)
         .mapNotNull { childNodes.item(it) as? Element }
 
-    private fun metadataOf(game: Element) = EsdeMetadata(
-        favorite = childText(game, "favorite")?.toBooleanStrictOrNull(),
-        completed = childText(game, "completed")?.toBooleanStrictOrNull(),
-        playcount = childText(game, "playcount")?.toLongOrNull(),
-        playtime = childText(game, "playtime")?.toLongOrNull(),
-        lastplayed = childText(game, "lastplayed"),
-        altemulator = childText(game, "altemulator"),
-        players = childText(game, "players")?.takeIf(EsdeMetadataValidation::isValidPlayers),
-        rating = childText(game, "rating")?.toDoubleOrNull()?.takeIf { it in 0.0..1.0 },
+    private fun metadataOf(game: Element) = metadataFrom { childText(game, it) }
+    private fun metadataFrom(value: (String) -> String?) = EsdeMetadata(
+        favorite = value("favorite")?.toBooleanStrictOrNull(),
+        completed = value("completed")?.toBooleanStrictOrNull(),
+        playcount = value("playcount")?.toLongOrNull()?.takeIf { it >= 0 },
+        playtime = value("playtime")?.toLongOrNull()?.takeIf { it >= 0 },
+        lastplayed = value("lastplayed")?.takeIf(EsdeMetadataValidation::isValidLastPlayed),
+        altemulator = value("altemulator"),
+        players = value("players")?.takeIf(EsdeMetadataValidation::isValidPlayers),
+        rating = value("rating")?.toDoubleOrNull()?.takeIf { it in 0.0..1.0 },
     )
 
     private fun applyMetadata(document: Document, game: Element, value: EsdeMetadata): Boolean {
@@ -118,8 +169,6 @@ class EsdeGamelistParser {
         directChild(parent, name)?.textContent
 
     private fun parseDocument(file: File): Document {
-        require(file.isFile && file.length() in 1..MAX_GAMELIST_BYTES) { "gamelist.xml has invalid size" }
-        if (containsAsciiIgnoreCase(file, "<!DOCTYPE")) throw SAXException("DOCTYPE is forbidden in gamelist.xml")
         val factory = DocumentBuilderFactory.newInstance()
         factory.isNamespaceAware = true
         runCatching { factory.isXIncludeAware = false }
@@ -137,12 +186,7 @@ class EsdeGamelistParser {
 
         // ES-DE currently writes alternativeEmulator and gameList as sibling roots. Parse that
         // known fragment form inside a private wrapper; never accept arbitrary additional roots.
-        val decoder = StandardCharsets.UTF_8.newDecoder()
-            .onMalformedInput(CodingErrorAction.REPORT)
-            .onUnmappableCharacter(CodingErrorAction.REPORT)
-        val text = decoder.decode(ByteBuffer.wrap(file.readBytes())).toString().removePrefix("\uFEFF")
-        val fragment = XML_DECLARATION.replaceFirst(text, "")
-        val document = builder.parse(InputSource(StringReader("<$FRAGMENT_ROOT>$fragment</$FRAGMENT_ROOT>")))
+        val document = EsdeXmlFragmentReader(file, FRAGMENT_ROOT, MAX_GAMELIST_BYTES).use { builder.parse(InputSource(it)) }
         validateFragment(document)
         return document
     }
@@ -174,20 +218,6 @@ class EsdeGamelistParser {
         runCatching { factory.setFeature(name, enabled) }
     }
 
-    private fun containsAsciiIgnoreCase(file: File, needle: String): Boolean {
-        val target = needle.uppercase().encodeToByteArray()
-        var matched = 0
-        file.inputStream().buffered().use { input ->
-            while (true) {
-                val value = input.read()
-                if (value < 0) return false
-                val upper = if (value in 'a'.code..'z'.code) value - 32 else value
-                matched = if (upper == target[matched].toInt()) matched + 1 else if (upper == target[0].toInt()) 1 else 0
-                if (matched == target.size) return true
-            }
-        }
-    }
-
     private fun writeDocument(file: File, document: Document) {
         val transformerFactory = TransformerFactory.newInstance()
         runCatching { transformerFactory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true) }
@@ -215,6 +245,6 @@ class EsdeGamelistParser {
     companion object {
         private const val MAX_GAMELIST_BYTES = 64L * 1024L * 1024L
         private const val FRAGMENT_ROOT = "esdeSyncDocument"
-        private val XML_DECLARATION = Regex("^\\s*<\\?xml\\s+[^?]*\\?>", RegexOption.IGNORE_CASE)
+        private val METADATA_FIELDS = setOf("path", "favorite", "completed", "playcount", "playtime", "lastplayed", "altemulator", "players", "rating")
     }
 }

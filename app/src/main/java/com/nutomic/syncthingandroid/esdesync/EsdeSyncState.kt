@@ -9,6 +9,7 @@ enum class EsdeSyncState {
     RESCANNING,
     SYNCING,
     IMPORTING_METADATA,
+    LAUNCHING,
     READY_TO_PLAY,
     OFFLINE_PLAYING,
     OFFLINE_CHANGES_PENDING,
@@ -25,7 +26,7 @@ enum class EsdeSyncState {
 object EsdeSafeLaunchCompletionPolicy {
     fun canResumeAutomatically(state: EsdeSyncState): Boolean = state !in setOf(
         EsdeSyncState.IDLE, EsdeSyncState.SAFE_TO_SWITCH,
-        EsdeSyncState.ESDE_RUNNING, EsdeSyncState.OFFLINE_PLAYING,
+        EsdeSyncState.ESDE_RUNNING, EsdeSyncState.OFFLINE_PLAYING, EsdeSyncState.LAUNCHING,
     )
 
     fun afterDone(current: EsdeSyncState): EsdeSyncState =
@@ -208,11 +209,11 @@ object EsdeSharedStateIgnoreRules {
         "/.esde-sync-global",
         "/.esde-sync-global/**",
     )
-    internal val REQUIRED_RULES = INCLUDE_PATTERNS.map { "!$it" }
+    internal val REQUIRED_RULES = INCLUDE_PATTERNS.map { "!$it" } + "*"
 
     fun evaluate(lines: Collection<String>): EsdeIgnoreRuleState {
         val normalized = lines.mapNotNull(::normalizeEffective)
-        val valid = normalized.take(INCLUDE_PATTERNS.size) == INCLUDE_PATTERNS.map { true to it }
+        val valid = normalized.take(REQUIRED_RULES.size) == INCLUDE_PATTERNS.map { true to it } + (false to "*")
         return if (valid) EsdeIgnoreRuleState.ACTIVE else EsdeIgnoreRuleState.MISSING
     }
 
@@ -220,7 +221,7 @@ object EsdeSharedStateIgnoreRules {
         addAll(REQUIRED_RULES)
         addAll(lines.filterNot { raw ->
             val (included, pattern) = normalize(raw)
-            included && pattern in INCLUDE_PATTERNS
+            (included && pattern in INCLUDE_PATTERNS) || (!included && pattern == "*")
         })
     }
 

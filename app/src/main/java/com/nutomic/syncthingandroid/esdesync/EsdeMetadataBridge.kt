@@ -11,7 +11,8 @@ class EsdeMetadataBridge(
 ) {
     fun exportSystem(systemDirectory: File, full: Boolean = false): EsdeExportResult {
         val gamelist = File(systemDirectory, GAMELIST)
-        if (!gamelist.isFile) return EsdeExportResult()
+        if (!gamelist.isFile) return EsdeExportResult(errors = listOf("${systemDirectory.name}: missing local gamelist.xml; open ES-DE to generate or scrape it first"))
+        require(gamelist.canonicalFile.parentFile == systemDirectory.canonicalFile) { "gamelist.xml escaped its system directory" }
         val current = parser.parse(gamelist)
         val previous = snapshots.load(systemDirectory.name)
         var writes = 0
@@ -19,13 +20,13 @@ class EsdeMetadataBridge(
             if ((full || previous[path] != metadata) && sidecars.write(systemDirectory, path, metadata)) writes++
         }
         if (previous != current) snapshots.save(systemDirectory.name, current)
-        onInspected(systemDirectory, EsdeSystemDiagnostics.from(current.keys, sidecars.scan(systemDirectory)))
         return EsdeExportResult(current.size, writes)
     }
 
     fun importSystem(systemDirectory: File): EsdeImportResult {
         val gamelist = File(systemDirectory, GAMELIST)
-        if (!gamelist.isFile) return EsdeImportResult()
+        if (!gamelist.isFile) return EsdeImportResult(invalid = 1, errors = listOf("${systemDirectory.name}: missing local gamelist.xml; sidecars cannot replace the local game list"))
+        require(gamelist.canonicalFile.parentFile == systemDirectory.canonicalFile) { "gamelist.xml escaped its system directory" }
         val scan = sidecars.scan(systemDirectory)
         if (scan.states.isEmpty()) {
             onInspected(systemDirectory, EsdeSystemDiagnostics.from(emptySet(), scan))

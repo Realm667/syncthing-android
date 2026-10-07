@@ -37,9 +37,10 @@ class EsdeSettingsEditor {
         if (values.isEmpty()) return 0
         val parsed = parse(file)
         var changed = 0
+        val indexed = settingElements(parsed.container).groupBy { it.getAttribute("name") }
         values.forEach { (name, value) ->
             require(value.type in SETTING_TYPES) { "Unsupported ES-DE setting type" }
-            val matches = settingElements(parsed.container).filter { it.getAttribute("name") == name }
+            val matches = indexed[name].orEmpty()
             require(matches.size <= 1) { "Duplicate ES-DE setting: $name" }
             val existing = matches.firstOrNull()
             if (existing?.tagName == value.type && existing.getAttribute("value") == value.value) return@forEach
@@ -124,7 +125,7 @@ class EsdeSettingsEditor {
         val topLevelElements = (0 until wrapper.childNodes.length)
             .mapNotNull { wrapper.childNodes.item(it) as? Element }
         if (topLevelElements.isEmpty()) throw SAXException("Missing ES-DE settings content")
-        val fragment = topLevelElements.size != 1
+        val fragment = topLevelElements.size != 1 || topLevelElements.single().tagName in SETTING_TYPES
         return ParsedSettings(document, if (fragment) wrapper else topLevelElements.single(), fragment)
     }
 

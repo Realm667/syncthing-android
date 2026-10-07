@@ -49,6 +49,7 @@ internal class EsdeSharedCollectionsManager(
         val conflicts = mutableListOf<String>()
         val errors = mutableListOf<String>()
         val warnings = mutableListOf<String>()
+        val decisions = mutableListOf<EsdeValueConflict>()
         var applied = 0
         var skipped = 0
         val sourceRoot = if (importing) sharedRoot else localRoot
@@ -84,7 +85,16 @@ internal class EsdeSharedCollectionsManager(
                 if (targetHash != null && (snapshot == null ||
                         (importing && targetHash != snapshot.localHash) ||
                         (!importing && targetHash != snapshot.sharedHash))) {
+                    if (snapshot != null && sourceHash == if (importing) snapshot.sharedHash else snapshot.localHash) {
+                        skipped++ // Only the target changed; do not overwrite it.
+                        return@forEach
+                    }
                     conflicts += sourceDefinition.name
+                    val localFile = if (importing) target else source
+                    val sharedFile = if (importing) source else target
+                    decisions += EsdeValueConflict("collections", sourceDefinition.name,
+                        localFile.readText().take(2048), sharedFile.readText().take(2048),
+                        EsdeHashes.file(localFile), EsdeHashes.file(sharedFile))
                     return@forEach
                 }
                 if (target.isFile) backups.create("collections", target)
@@ -103,7 +113,28 @@ internal class EsdeSharedCollectionsManager(
             conflicts.distinct(),
             errors.distinct(),
             warnings.distinct(),
+            decisions,
         )
+    }
+
+    fun resolveConflict(conflict: EsdeValueConflict, useShared: Boolean) {
+        require(conflict.category == "collections")
+        codec.validateName(conflict.name)
+        val local = File(localRoot, "${conflict.name}.${EsdeCollectionCodec.EXTENSION}")
+        val shared = File(sharedRoot, local.name)
+        requireInside(localRoot, local)
+        requireInside(sharedRoot, shared)
+        codec.read(local)
+        codec.read(shared)
+        require(EsdeHashes.file(local) == conflict.localHash && EsdeHashes.file(shared) == conflict.sharedHash) {
+            "Collection changed; refresh the conflict before deciding"
+        }
+        val source = if (useShared) shared else local
+        val target = if (useShared) local else shared
+        backups.create("collections", target)
+        AtomicFileWriter.write(target) { output -> source.inputStream().use { it.copyTo(output) } }
+        val hash = EsdeHashes.file(target)
+        snapshots.save("collections", conflict.name, EsdeSharedSnapshot(hash, hash))
     }
 
     private fun requireInside(root: File, child: File) {

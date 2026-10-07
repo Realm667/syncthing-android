@@ -128,31 +128,8 @@ class EsdeSyncStateEvaluatorTest {
         )
     }
 
-    @Test fun processStopWaitsForConfirmedExitAndIsBounded() {
-        var runningChecks = 0
-        var stopRequests = 0
-        var waits = 0
-        assertTrue(
-            EsdeProcessStopPolicy.stop(
-                attempts = 5,
-                intervalMs = 1,
-                requestStop = { stopRequests++ },
-                isRunning = { ++runningChecks < 3 },
-                wait = { waits++ },
-            ),
-        )
-        assertEquals(3, stopRequests)
-        assertEquals(2, waits)
-
-        assertFalse(
-            EsdeProcessStopPolicy.stop(
-                attempts = 2,
-                intervalMs = 1,
-                requestStop = { },
-                isRunning = { true },
-                wait = { },
-            ),
-        )
+    @Test fun launchReservationCannotBeRestartedByLateServiceCallbacks() {
+        assertFalse(EsdeSafeLaunchCompletionPolicy.canResumeAutomatically(EsdeSyncState.LAUNCHING))
     }
 
     @Test fun ignoreRuleHonorsSyncthingFirstMatchSemantics() {
@@ -176,7 +153,7 @@ class EsdeSyncStateEvaluatorTest {
         val existing = listOf("!/collections/*.xcc", "*", "gamelist.xml")
         val corrected = EsdeSharedStateIgnoreRules.placeRulesFirst(existing)
         assertEquals(EsdeIgnoreRuleState.ACTIVE, EsdeSharedStateIgnoreRules.evaluate(corrected))
-        assertEquals(EsdeSharedStateIgnoreRules.REQUIRED_RULES, corrected.take(2))
+        assertEquals(EsdeSharedStateIgnoreRules.REQUIRED_RULES, corrected.take(3))
         assertEquals("gamelist.xml", corrected.last())
         assertEquals(
             EsdeIgnoreRuleState.MISSING,

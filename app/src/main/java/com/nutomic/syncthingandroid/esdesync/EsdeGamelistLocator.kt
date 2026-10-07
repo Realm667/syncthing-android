@@ -5,6 +5,7 @@ import java.io.File
 class EsdeGamelistLocator(private val root: File) {
     fun systemDirectories(): List<File> = root
         .listFiles { file -> file.isDirectory &&
+            contains(file) && file.canonicalFile == File(root.canonicalFile, file.name) &&
             (File(file, EsdeMetadataBridge.GAMELIST).isFile ||
                 File(file, EsdeSidecarStore.SIDECAR_DIRECTORY).isDirectory) }
         ?.sortedBy { it.name }

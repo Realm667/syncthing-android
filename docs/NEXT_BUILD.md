@@ -1,5 +1,31 @@
 # Next build backlog
 
+## Live transfer speed during synchronization implemented 2026-10-07
+
+- Show download and upload speed next to or below the Safe Launch progress bar
+  during start synchronization and final synchronization, including deferred sync.
+- Refresh once per second with readable units such as KB/s and MB/s, using actual
+  Syncthing traffic counter differences and elapsed time.
+- Keep the lightweight speed refresh separate from adaptive synchronization-gate
+  polling; do not issue heavy per-folder requests every second.
+- At zero transfer speed, retain an accurate scanning, checking, or waiting status
+  when available, so zero traffic is not presented as a stalled process.
+- Stop refreshes when the screen is inactive, synchronization has ended, or ES-DE
+  is playing. Preserve `EsdeSyncState` as the sole source of launch readiness.
+
+### Acceptance criteria
+
+- Speed is visible and updates every second while synchronization is active.
+- No transfer rate is invented for local processing or disconnected devices.
+- The display works in light and dark mode and does not change the safety gate.
+
+The implementation shows aggregate Syncthing upload/download traffic, explicitly
+labelled as such, rather than claiming to measure only the selected gaming folders.
+The first sample displays a measuring status; zero traffic displays a checking or
+waiting status. Unknown-duration phases use an indeterminate bar, not invented
+percentages. See [optimization notes](OPTIMIZATION_2026-10-07.md) for verification
+and remaining release checks.
+
 ## Self-healing stale conflict fallback (implemented for the next build 2026-09-02)
 
 - `RETRY` revalidates cached Syncthing conflict paths off the UI thread before starting the

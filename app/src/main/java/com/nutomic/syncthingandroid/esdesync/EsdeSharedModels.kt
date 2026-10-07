@@ -9,6 +9,7 @@ data class EsdeSharedOperationResult(
     val conflicts: List<String> = emptyList(),
     val errors: List<String> = emptyList(),
     val warnings: List<String> = emptyList(),
+    val decisions: List<EsdeValueConflict> = emptyList(),
 ) {
     val successful: Boolean get() = conflicts.isEmpty() && errors.isEmpty()
     fun summary(subject: String): String = buildString {
@@ -43,6 +44,16 @@ data class EsdeSharedSettingsProfile(
 }
 
 internal data class EsdeSharedSnapshot(
+    val localHash: String,
+    val sharedHash: String,
+    val withheld: Boolean = false,
+)
+
+data class EsdeValueConflict(
+    val category: String,
+    val name: String,
+    val localValue: String,
+    val sharedValue: String,
     val localHash: String,
     val sharedHash: String,
 )

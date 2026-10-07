@@ -33,17 +33,15 @@ class EsdeSyncCoordinator(
     )
     @Volatile private var observer: EsdeFileObserver? = null
     @Volatile private var stopped = false
+    private val remoteRevision = java.util.concurrent.atomic.AtomicLong()
     @Volatile private var diagnostics = EsdeDiagnostics()
     private val remoteImports = EsdeCoalescingQueue<File>(
         schedule = { work -> executor.schedule({ work() }, 900, TimeUnit.MILLISECONDS) },
         action = { system ->
             if (settings.enabled && !stopped && isInsideGamelists(system)) {
-                if (!settings.bootstrapComplete) settings.bootstrapPendingImport = true
-                else if (!settings.esdeWasLaunched) runCatching {
-                    requireEsdeStopped()
-                    importSystemInternal(system)
-                    refreshDiagnostics(full = false)
-                }.onFailure { recordError("Deferred remote metadata import", it) }
+                // Only Safe Launch (or an explicit import) may apply received metadata.
+                // Importing here could race the final local export after ES-DE was stopped.
+                diagnosticsCache.invalidate(system)
             }
         },
     )
@@ -98,24 +96,37 @@ class EsdeSyncCoordinator(
     }
 
     fun onRemoteSidecarChanged(fullPath: String) {
-        if (stopped || !settings.enabled || !fullPath.replace('\\', '/').contains("/.esde-sync/") ||
-            !fullPath.endsWith(EsdeSidecarStore.SIDECAR_SUFFIX)) return
+        if (stopped || !settings.enabled) return
+        val normalized = fullPath.replace('\\', '/')
+        val global = settings.sharedStateSyncEnabled && normalized.contains("/.esde-sync-global/")
+        val game = normalized.contains("/.esde-sync/") && fullPath.endsWith(EsdeSidecarStore.SIDECAR_SUFFIX)
+        if (!global && !game) return
+        synchronized(remoteRevision) {
+            remoteRevision.incrementAndGet()
+            if (game || settings.bootstrapComplete) settings.bootstrapPendingImport = true
+        }
+        if (!game) return
         // Lexical grouping only. Canonical root checks and all file access stay on the worker.
         val system = generateSequence(File(fullPath).parentFile) { it.parentFile }
             .firstOrNull { it.name == EsdeSidecarStore.SIDECAR_DIRECTORY }?.parentFile ?: return
         remoteImports.submit(system.absoluteFile)
     }
 
-    fun importNow(finalizeBootstrap: Boolean = false, callback: (EsdeImportResult) -> Unit = {}) {
+    fun currentRemoteRevision(): Long = remoteRevision.get()
+
+    fun importNow(finalizeBootstrap: Boolean = false, expectedRevision: Long? = null, callback: (EsdeImportResult) -> Unit = {}) {
         executor.execute {
+            val revision = expectedRevision ?: remoteRevision.get()
             val result = runCatching {
                 requireEsdeStopped()
                 importAllInternal()
             }
                 .onFailure { recordError("Import failed", it) }
-                .getOrDefault(EsdeImportResult(invalid = 1))
-            if (finalizeBootstrap && result.invalid == 0) {
-                settings.bootstrapPendingImport = false
+                .getOrElse { EsdeImportResult(invalid = 1, errors = listOf(it.message ?: "Metadata import failed")) }
+            if (result.invalid == 0 && result.errors.isEmpty()) {
+                synchronized(remoteRevision) { settings.bootstrapPendingImport = remoteRevision.get() != revision }
+            }
+            if (finalizeBootstrap && result.invalid == 0 && result.errors.isEmpty()) {
                 settings.bootstrapComplete = true
                 startObserver()
             }
@@ -125,18 +136,31 @@ class EsdeSyncCoordinator(
 
     fun exportNow(full: Boolean = false, callback: (EsdeExportResult) -> Unit = {}) {
         executor.execute {
-            val result = runCatching { exportAllInternal(full) }
+            val result = runCatching { requireEsdeStopped(); exportAllInternal(full) }
                 .onFailure { recordError("Export failed", it) }
-                .getOrDefault(EsdeExportResult())
+                .getOrElse { EsdeExportResult(errors = listOf(it.message ?: "Metadata export failed")) }
             mainHandler.post { callback(result) }
+        }
+    }
+
+    /** Shares the bridge queue: no import can overlap the transition into ES-DE. */
+    fun prepareLaunch(offline: Boolean, callback: (Boolean, String) -> Unit) {
+        executor.execute {
+            val result = runCatching {
+                check(!stopped && settings.enabled) { "Metadata bridge is unavailable" }
+                check(offline || !settings.bootstrapPendingImport) { "New synchronized metadata arrived. Retry the start synchronization." }
+                settings.esdeWasLaunched = true
+            }
+            mainHandler.post { callback(result.isSuccess, result.exceptionOrNull()?.message.orEmpty()) }
         }
     }
 
     fun closeEsdeAfterPlay(callback: (Boolean, String) -> Unit = { _, _ -> }) {
         executor.execute {
             val result = runCatching {
-                check(EsdeProcessController.stopBackgroundProcess(appContext, settings.applicationPackage)) {
-                    "ES-DE could not be closed automatically. Close ES-DE and retry."
+                validateFolderConfiguration()
+                check(EsdeProcessController.isConfirmedStopped(appContext, settings.applicationPackage)) {
+                    "Android cannot confirm ES-DE is closed. Open ES-DE app info, select Force stop, then return and Retry."
                 }
                 settings.esdeWasLaunched = false
                 "ES-DE was closed. Reading final metadata…"
@@ -154,6 +178,17 @@ class EsdeSyncCoordinator(
                 runCatching { collectionsManager().discover() }.getOrDefault(emptySet())
             } else emptySet()
             mainHandler.post { callback(names) }
+        }
+    }
+
+    fun resolveSharedConflict(conflict: EsdeValueConflict, useShared: Boolean, callback: (Boolean, String) -> Unit) {
+        executor.execute {
+            val result = runCatching {
+                requireEsdeStopped()
+                if (conflict.category == "settings") settingsManager().resolveConflict(conflict, useShared)
+                else collectionsManager().resolveConflict(conflict, useShared)
+            }
+            mainHandler.post { callback(result.isSuccess, result.exceptionOrNull()?.message ?: "Conflict resolved; verifying synchronization") }
         }
     }
 
@@ -213,6 +248,12 @@ class EsdeSyncCoordinator(
 
     fun publishSharedState(callback: (EsdeGlobalImportResult) -> Unit = {}) {
         executor.execute {
+            val closed = runCatching { requireEsdeStopped() }
+            if (closed.isFailure) {
+                mainHandler.post { callback(EsdeGlobalImportResult(settings = EsdeSharedOperationResult(
+                    errors = listOf(closed.exceptionOrNull()?.message ?: "ES-DE must be closed")))) }
+                return@execute
+            }
             val collections = if (settings.sharedStateSyncEnabled && settings.sharedCollectionsEnabled) {
                 runCatching { collectionsManager().publish(settings.sharedCollectionNames) }
                     .getOrElse { EsdeSharedOperationResult(errors = listOf(it.message ?: "Publish failed")) }
@@ -235,10 +276,10 @@ class EsdeSyncCoordinator(
                 mainHandler.post { callback(EsdeInitializationResult(blockedByExistingSidecars = true)) }
                 return@execute
             }
-            val result = runCatching { exportAllInternal(full = true) }
+            val result = runCatching { requireEsdeStopped(); exportAllInternal(full = true) }
                 .onFailure { recordError("Initial export failed", it) }
-                .getOrDefault(EsdeExportResult())
-            if (result.gamesRead > 0) {
+                .getOrElse { EsdeExportResult(errors = listOf(it.message ?: "Initial metadata export failed")) }
+            if (result.gamesRead > 0 && result.successful) {
                 settings.bootstrapPendingImport = false
                 settings.bootstrapComplete = true
                 startObserver()
@@ -276,6 +317,7 @@ class EsdeSyncCoordinator(
     fun ensureLegacyGamelistLocation(callback: (Boolean, String) -> Unit = { _, _ -> }) {
         executor.execute {
             val result = runCatching {
+                validateFolderConfiguration()
                 requireEsdeStopped()
                 ensureRequiredEsdeSettingsBlocking(appContext.filesDir, settings.esdeDirectory,
                     settings.usesLegacyGamelistLocation())
@@ -300,12 +342,15 @@ class EsdeSyncCoordinator(
     private fun importAllInternal(): EsdeImportResult {
         var result = EsdeImportResult()
         systemDirectories().forEach { system ->
-            val next = importSystemInternal(system)
+            val next = runCatching { importSystemInternal(system) }.getOrElse {
+                EsdeImportResult(invalid = 1, errors = listOf("${system.name}: ${it.message}"))
+            }
             result = EsdeImportResult(
                 result.matched + next.matched,
                 result.unmatched + next.unmatched,
                 result.invalid + next.invalid,
                 result.changedGames + next.changedGames,
+                result.errors + next.errors,
             )
         }
         preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_IMPORT, System.currentTimeMillis()).apply()
@@ -323,9 +368,11 @@ class EsdeSyncCoordinator(
     private fun exportAllInternal(full: Boolean): EsdeExportResult {
         var result = EsdeExportResult()
         systemDirectories().forEach { system ->
-            diagnosticsCache.invalidate(system)
-            val next = bridge.exportSystem(system, full)
-            result = EsdeExportResult(result.gamesRead + next.gamesRead, result.sidecarsWritten + next.sidecarsWritten)
+            val next = runCatching { bridge.exportSystem(system, full) }.getOrElse {
+                EsdeExportResult(errors = listOf("${system.name}: ${it.message}"))
+            }
+            if (next.sidecarsWritten > 0) diagnosticsCache.invalidate(system)
+            result = EsdeExportResult(result.gamesRead + next.gamesRead, result.sidecarsWritten + next.sidecarsWritten, result.errors + next.errors)
         }
         if (result.sidecarsWritten > 0) settings.pendingLocalChanges = true
         preferences.edit().putLong(EsdeSyncSettings.PREF_LAST_EXPORT, System.currentTimeMillis()).apply()
@@ -337,17 +384,21 @@ class EsdeSyncCoordinator(
         if (observer != null || stopped || !settings.enabled || !settings.bootstrapComplete) return
         val gamelists = gamelistsDirectory()
         observer = EsdeFileObserver(gamelists) { gamelist ->
-            executor.execute {
+            if (!stopped) runCatching { executor.execute {
+                if (stopped || !settings.enabled || !isInsideGamelists(gamelist)) return@execute
                 runCatching {
                     gamelist.parentFile?.let {
-                        diagnosticsCache.invalidate(it)
-                        bridge.exportSystem(it)
+                        bridge.exportSystem(it).also { result ->
+                            if (result.sidecarsWritten > 0) diagnosticsCache.invalidate(it)
+                            check(result.successful) { result.errors.joinToString("; ") }
+                        }
                     } ?: EsdeExportResult()
                 }
                     .onSuccess { if (it.sidecarsWritten > 0) settings.pendingLocalChanges = true }
                     .onFailure { recordError("Observed export failed", it) }
-                refreshDiagnostics(full = false)
-            }
+                // Refresh invalidated diagnostics at finalization or on explicit request,
+                // not by scanning every sidecar after each observed game change.
+            } }.onFailure { if (!stopped) recordError("Could not queue metadata export", it) }
         }.also { it.start() }
     }
 
@@ -424,11 +475,24 @@ class EsdeSyncCoordinator(
     }
 
     private fun requireEsdeStopped() {
+        validateFolderConfiguration()
         check(!settings.esdeWasLaunched) { "ES-DE is running; shared state can only be applied before Safe Launch" }
-        check(EsdeProcessController.stopBackgroundProcess(appContext, settings.applicationPackage)) {
-            "ES-DE could not be closed automatically. Close ES-DE and retry."
+        check(EsdeProcessController.isConfirmedStopped(appContext, settings.applicationPackage)) {
+            "Android cannot confirm ES-DE is closed. Open ES-DE app info, select Force stop, then return and Retry."
         }
         require(esdeSettingsFile().isFile) { "Missing ES-DE settings/es_settings.xml" }
+    }
+
+    private fun validateFolderConfiguration() {
+        val folders = restApi.folders.associateBy { it.id }
+        settings.requiredFolderIds().forEach { id ->
+            val folder = folders[id] ?: error("Selected sync folder is unavailable: $id")
+            require(folder.getDevice(settings.primaryDeviceId) != null) { "${folder.label}: not shared with the primary device" }
+        }
+        val rom = folders[settings.romFolderId] ?: error("Select the ROM / gamelist sync folder")
+        val shared = if (settings.sharedStateSyncEnabled) sharedStateSyncRoot() else null
+        require(!rom.path.isNullOrBlank()) { "ROM folder has no local path" }
+        EsdeFolderConfiguration.validate(File(rom.path), gamelistsDirectory(), File(settings.esdeDirectory), shared)
     }
 
     private fun sharedAction(
@@ -437,7 +501,7 @@ class EsdeSyncCoordinator(
         action: () -> EsdeSharedOperationResult,
     ) {
         executor.execute {
-            val result = runCatching(action).getOrElse { error ->
+            val result = runCatching { requireEsdeStopped(); action() }.getOrElse { error ->
                 recordError("Shared ES-DE operation failed", error)
                 EsdeSharedOperationResult(errors = listOf(error.message ?: "Operation failed"))
             }

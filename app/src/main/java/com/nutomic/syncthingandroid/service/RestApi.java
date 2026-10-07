@@ -178,6 +178,17 @@ public class RestApi {
     private Gson mGson;
 
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
+    private final com.nutomic.syncthingandroid.esdesync.EsdeConflictInventory esdeConflictInventory =
+            new com.nutomic.syncthingandroid.esdesync.EsdeConflictInventory();
+
+    public String[] getEsdeConflictFiles(String path, FolderStatus status) {
+        return esdeConflictInventory.scan(path, status.sequence + ":" + status.stateChanged);
+    }
+    public void refreshEsdeConflictFiles(String folderId, FolderStatus status) {
+        Folder folder = getFolderByID(folderId);
+        if (folder == null) throw new IllegalStateException("Folder disappeared");
+        mLocalCompletion.setDiscoveredConflictFiles(folderId, getEsdeConflictFiles(folder.path, status));
+    }
 
     @Inject NotificationHandler mNotificationHandler;
 
@@ -872,6 +883,24 @@ public class RestApi {
         }, error -> errorListener.run());
     }
 
+    public void rescanFolderVerified(String folderId, Runnable success, Runnable failure) {
+        new PostRequest(mContext, mUrl, PostRequest.URI_DB_SCAN, mApiKey,
+                ImmutableMap.of("folder", folderId), null, ignored -> success.run(), error -> failure.run());
+    }
+
+    public void getFreshTransferCounters(OnResultListener1<Connections> listener, Runnable failure) {
+        new GetRequest(mContext, mUrl, "/rest/system/connections", mApiKey,
+                ImmutableMap.of(), result -> listener.onResult(mGson.fromJson(result, Connections.class)),
+                error -> failure.run());
+    }
+
+    public void postFolderIgnoreListVerified(String folderId, String[] ignore, Runnable success, Runnable failure) {
+        FolderIgnoreList list = new FolderIgnoreList();
+        list.ignore = ignore;
+        new PostRequest(mContext, mUrl, PostRequest.URI_DB_IGNORES, mApiKey,
+                ImmutableMap.of("folder", folderId), mGson.toJson(list), ignored -> success.run(), error -> failure.run());
+    }
+
     /** Performs an uncached folder-status read for launch safety checks. */
     public void getFreshFolderStatus(String folderId, OnResultListener1<FolderStatus> listener,
                                      Runnable errorListener) {
@@ -895,13 +924,37 @@ public class RestApi {
     public void getFreshRemoteNeed(String folderId, String deviceId,
                                    OnResultListener1<RemoteNeed> listener,
                                    Runnable errorListener) {
+        getFreshRemoteNeedPage(folderId, deviceId, 1, new java.util.ArrayList<>(), listener, errorListener);
+    }
+
+    private void getFreshRemoteNeedPage(String folderId, String deviceId, int page,
+            java.util.List<com.nutomic.syncthingandroid.model.RemoteNeedItem> collected,
+            OnResultListener1<RemoteNeed> listener, Runnable errorListener) {
+        if (page > 100) { errorListener.run(); return; }
         new GetRequest(mContext, mUrl, GetRequest.URI_DB_REMOTE_NEED, mApiKey,
                 ImmutableMap.of(
                         "folder", folderId,
                         "device", deviceId,
-                        "page", "1",
+                        "page", Integer.toString(page),
                         "perpage", "1000"
-                ), result -> listener.onResult(mGson.fromJson(result, RemoteNeed.class)),
+                ), result -> {
+                    RemoteNeed need = mGson.fromJson(result, RemoteNeed.class);
+                    if (need == null) { errorListener.run(); return; }
+                    collected.addAll(need.allItems());
+                    boolean hasBlocking = false;
+                    for (com.nutomic.syncthingandroid.model.RemoteNeedItem item : need.allItems()) {
+                        if (com.nutomic.syncthingandroid.esdesync.EsdeRemoteNeedPolicy.INSTANCE.isBlocking(item)) {
+                            hasBlocking = true;
+                            break;
+                        }
+                    }
+                    if (!hasBlocking && need.allItems().size() == 1000) {
+                        getFreshRemoteNeedPage(folderId, deviceId, page + 1, collected, listener, errorListener);
+                    } else {
+                        need.files = collected.toArray(new com.nutomic.syncthingandroid.model.RemoteNeedItem[0]);
+                        listener.onResult(need);
+                    }
+                },
                 error -> errorListener.run());
     }
 
@@ -1168,6 +1221,8 @@ public class RestApi {
     public void setDiscoveredConflictFiles(final String folderId,
                                            final String[] discoveredConflictFiles) {
         mLocalCompletion.setDiscoveredConflictFiles(folderId, discoveredConflictFiles);
+        Folder folder = getFolderByID(folderId);
+        if (folder != null) esdeConflictInventory.invalidate(folder.path);
     }
 
     private void sendBroadcastToApps(Intent intent) {
@@ -1303,10 +1358,16 @@ public class RestApi {
 
             if (finalPlanGetSyncConflictFiles) {
                 // Check for ".sync-conflict-YYYYMMDD-HHMMSS-DEVICEI*" files.
+                boolean gamingEnabled = PreferenceManager.getDefaultSharedPreferences(mContext)
+                        .getBoolean(com.nutomic.syncthingandroid.esdesync.EsdeSyncSettings.PREF_ENABLED, false);
+                try {
                 mLocalCompletion.setDiscoveredConflictFiles(
                         folderId,
-                        Util.getSyncConflictFiles(folder.path)
+                        gamingEnabled ? getEsdeConflictFiles(folder.path, folderStatus) : Util.getSyncConflictFiles(folder.path)
                 );
+                } catch (Exception error) {
+                    Log.w(TAG, "Conflict scan failed; preserving previous inventory", error);
+                }
             }
 
             if (finalPlanOnFolderSyncCompleted) {

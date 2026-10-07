@@ -29,4 +29,11 @@ public class PostRequest extends ApiRequest {
         connect(Request.Method.POST, uri, postBody, listener, null);
     }
 
+    public PostRequest(Context context, URL url, String path, String apiKey,
+                       Map<String, String> params, String postBody,
+                       OnSuccessListener listener, OnErrorListener errorListener) {
+        super(context, url, path, apiKey);
+        connect(Request.Method.POST, buildUri(params), postBody, listener, errorListener);
+    }
+
 }

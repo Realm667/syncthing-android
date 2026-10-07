@@ -139,6 +139,7 @@ internal class EsdeConflictResolver(
         val state = candidate.reader(StandardCharsets.UTF_8).use { gson.fromJson(it, EsdeGameState::class.java) }
             ?: throw IllegalArgumentException("Empty sidecar")
         require(state.schemaVersion == EsdeGameState.SCHEMA_VERSION) { "Unsupported sidecar schema" }
+        EsdeMetadataValidation.validate(state)
         val normalized = EsdePathPolicy.normalizeGamePath(state.game)
         require(state.game == normalized) { "Sidecar game path is not canonical" }
         require(state.players == null || EsdeMetadataValidation.isValidPlayers(state.players)) { "Invalid players value" }

@@ -47,15 +47,21 @@ class EsdeIgnoreRuleManager(private val restApi: RestApi) {
                         EsdeIgnoreRuleState.CONFLICTING_INCLUDE -> synchronized(this) { conflicting++ }
                         EsdeIgnoreRuleState.MISSING -> {
                             val corrected = correct(existing)
-                            restApi.postFolderIgnoreList(folderId, corrected.toTypedArray())
-                            synchronized(this) { updated++ }
+                            EsdeVerifiedIgnoreUpdate(
+                                write = { rules, success, failure -> restApi.postFolderIgnoreListVerified(folderId, rules.toTypedArray(), success, failure) },
+                                read = { success, failure -> restApi.getFolderIgnoreList(folderId,
+                                    { success(it.ignore?.toList().orEmpty()) }, failure) },
+                            ).apply(corrected, { evaluate(it) == EsdeIgnoreRuleState.ACTIVE }) { ok ->
+                                synchronized(this) { if (ok) updated++ else failed++ }
+                                done()
+                            }
+                            return@getFolderIgnoreList
                         }
                     }
                 } catch (_: Exception) {
                     synchronized(this) { failed++ }
-                } finally {
-                    done()
                 }
+                done()
             }, {
                 synchronized(this) { failed++ }
                 done()

@@ -37,6 +37,21 @@ data class EsdeGameState(
 }
 
 object EsdeMetadataValidation {
+    fun validate(state: EsdeGameState) {
+        require(state.playcount == null || state.playcount >= 0) { "Negative play count" }
+        require(state.playtime == null || state.playtime >= 0) { "Negative play time" }
+        require(state.lastplayed == null || isValidLastPlayed(state.lastplayed)) { "Invalid last played timestamp" }
+        require(state.altemulator == null || (state.altemulator.length <= 512 &&
+            state.altemulator.none { it.isISOControl() })) { "Invalid alternate emulator" }
+        require(state.players == null || isValidPlayers(state.players)) { "Invalid players value" }
+        require(state.rating == null || state.rating in 0.0..1.0) { "Invalid rating value" }
+    }
+    fun isValidLastPlayed(value: String): Boolean {
+        if (value.isEmpty()) return true
+        if (!value.matches(Regex("^[0-9]{8}T[0-9]{6}$"))) return false
+        val format = java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss", java.util.Locale.ROOT).apply { isLenient = false }
+        return runCatching { format.parse(value) != null }.getOrDefault(false)
+    }
     fun isValidPlayers(value: String): Boolean {
         val match = Regex("^(\\d{1,2})(?:-(\\d{1,2}))?$").matchEntire(value) ?: return false
         val first = match.groupValues[1].toInt()
@@ -50,12 +65,16 @@ data class EsdeImportResult(
     val unmatched: Int = 0,
     val invalid: Int = 0,
     val changedGames: Int = 0,
+    val errors: List<String> = emptyList(),
 )
 
 data class EsdeExportResult(
     val gamesRead: Int = 0,
     val sidecarsWritten: Int = 0,
-)
+    val errors: List<String> = emptyList(),
+) {
+    val successful: Boolean get() = errors.isEmpty()
+}
 
 data class EsdeInitializationResult(
     val export: EsdeExportResult = EsdeExportResult(),

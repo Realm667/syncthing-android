@@ -28,14 +28,22 @@ internal object EsdeHashes {
 internal class EsdeSharedSnapshotStore(private val root: File, private val gson: Gson = Gson()) {
     fun load(namespace: String, key: String): EsdeSharedSnapshot? {
         val file = target(namespace, key)
-        if (!file.isFile || file.length() > 16 * 1024) return null
-        return runCatching { file.reader().use { gson.fromJson(it, EsdeSharedSnapshot::class.java) } }.getOrNull()
+        if (!file.exists()) return null
+        require(file.isFile && file.length() in 1..16 * 1024) { "Shared snapshot has invalid size; recovery required" }
+        return file.reader().use { gson.fromJson(it, EsdeSharedSnapshot::class.java) }
+            ?: error("Shared snapshot is damaged; recovery required")
     }
 
     fun save(namespace: String, key: String, snapshot: EsdeSharedSnapshot) {
+        if (load(namespace, key) == snapshot) return
         AtomicFileWriter.write(target(namespace, key)) { output ->
             output.writer().apply { gson.toJson(snapshot, this); flush() }
         }
+    }
+
+    fun remove(namespace: String, key: String) {
+        val file = target(namespace, key)
+        check(!file.exists() || file.delete()) { "Cannot reset shared snapshot" }
     }
 
     private fun target(namespace: String, key: String): File {

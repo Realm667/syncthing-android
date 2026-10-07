@@ -48,6 +48,7 @@ internal class EsdeSharedSettingsManager(
         var applied = 0
         var skipped = 0
         val completed = mutableMapOf<String, Pair<String, String>>()
+        val decisions = mutableListOf<EsdeValueConflict>()
 
         shareable.sorted().forEach { name ->
             try {
@@ -66,6 +67,10 @@ internal class EsdeSharedSettingsManager(
                     return@forEach
                 }
                 val snapshot = snapshots.load("settings", name)
+                if (snapshot?.withheld == true && localHash == snapshot.localHash) {
+                    skipped++
+                    return@forEach
+                }
                 if (oldHash == null && snapshot == null && !allowInitialize) {
                     // A missing shared field is not permission for automatic publishing to promote
                     // this device's local default. Only the explicit source action may add it.
@@ -73,7 +78,13 @@ internal class EsdeSharedSettingsManager(
                     return@forEach
                 }
                 if (oldHash != null && (snapshot == null || oldHash != snapshot.sharedHash)) {
+                    if (snapshot != null && localHash == snapshot.localHash) {
+                        skipped++ // Only the synchronized side changed; preserve it for import.
+                        return@forEach
+                    }
                     conflicts += name
+                    decisions += EsdeValueConflict("settings", name, normalized,
+                        spec.normalize(old!!.value), localHash, oldHash)
                     return@forEach
                 }
                 output[name] = candidate
@@ -85,7 +96,7 @@ internal class EsdeSharedSettingsManager(
         }
         if (applied > 0) writeProfile(EsdeSharedSettingsProfile(settings = output.toSortedMap()))
         completed.forEach { (name, hashes) -> snapshots.save("settings", name, EsdeSharedSnapshot(hashes.first, hashes.second)) }
-        return EsdeSharedOperationResult(selected.size, applied, skipped + reservedSkipped, conflicts, errors)
+        return EsdeSharedOperationResult(selected.size, applied, skipped + reservedSkipped, conflicts, errors, decisions = decisions)
     }
 
     fun importSelected(selected: Set<String>): EsdeSharedOperationResult {
@@ -105,6 +116,7 @@ internal class EsdeSharedSettingsManager(
         val conflicts = mutableListOf<String>()
         val errors = mutableListOf<String>()
         val warnings = mutableListOf<String>()
+        val decisions = mutableListOf<EsdeValueConflict>()
         var skipped = reservedSkipped
 
         shareable.sorted().forEach { name ->
@@ -127,11 +139,13 @@ internal class EsdeSharedSettingsManager(
                 }
                 if (name == "Theme" && !themeExists(sharedValue)) {
                     skipped++
+                    completed[name] = EsdeSharedSnapshot(localHash.orEmpty(), sharedHash, withheld = true)
                     warnings += "$name was not found locally and was left unchanged"
                     return@forEach
                 }
                 if (name == "ThemeVariant" && !themeVariantExists(sharedValue, changes, local)) {
                     skipped++
+                    completed[name] = EsdeSharedSnapshot(localHash.orEmpty(), sharedHash, withheld = true)
                     warnings += "$name was not found locally and was left unchanged"
                     return@forEach
                 }
@@ -140,7 +154,12 @@ internal class EsdeSharedSettingsManager(
                 // shared value is authoritative on first import, preventing fresh device defaults
                 // from becoming the source. A private backup is created before applying the value.
                 if (current != null && snapshot != null && localHash != snapshot.localHash) {
+                    if (sharedHash == snapshot.sharedHash) {
+                        skipped++ // Only the local side changed. Publish it after play.
+                        return@forEach
+                    }
                     conflicts += name
+                    decisions += EsdeValueConflict("settings", name, current.value, sharedValue, localHash.orEmpty(), sharedHash)
                     return@forEach
                 }
                 changes[name] = EsdeSettingsEditor.XmlSetting(spec.type, sharedValue)
@@ -154,7 +173,31 @@ internal class EsdeSharedSettingsManager(
             editor.apply(settingsFile, changes)
         }
         completed.forEach { (name, snapshot) -> snapshots.save("settings", name, snapshot) }
-        return EsdeSharedOperationResult(selected.size, changes.size, skipped, conflicts, errors, warnings)
+        return EsdeSharedOperationResult(selected.size, changes.size, skipped, conflicts, errors, warnings, decisions)
+    }
+
+    fun resolveConflict(conflict: EsdeValueConflict, useShared: Boolean) {
+        require(conflict.category == "settings")
+        require(sharedConflictFiles().isEmpty()) { "Resolve Syncthing file conflicts first" }
+        val spec = EsdeSharedSettingsCatalog.requireAllowed(conflict.name)
+        require(EsdeSharedSettingsCatalog.isShareable(conflict.name))
+        val local = editor.read(settingsFile, setOf(conflict.name))[conflict.name] ?: error("Local setting disappeared")
+        val profile = readProfile()
+        val shared = profile.settings[conflict.name] ?: error("Shared setting disappeared")
+        require(valueHash(local.type, local.value) == conflict.localHash &&
+            valueHash(shared.type, spec.normalize(shared.value)) == conflict.sharedHash) { "Values changed; refresh the conflict before deciding" }
+        val value = if (useShared) spec.normalize(shared.value) else spec.normalize(typedXmlValue(spec, local.value))
+        if (useShared) {
+            if (conflict.name == "Theme") require(themeExists(value)) { "Install the selected theme first" }
+            if (conflict.name == "ThemeVariant") require(themeVariantExists(value, emptyMap(), editor.read(settingsFile, setOf("Theme")))) { "Install the selected theme variant first" }
+            backups.create("settings", settingsFile)
+            editor.apply(settingsFile, mapOf(conflict.name to EsdeSettingsEditor.XmlSetting(spec.type, value)))
+        } else {
+            backups.create("shared-settings", sharedFile)
+            writeProfile(profile.copy(settings = profile.settings + (conflict.name to EsdeSharedSetting(spec.type, typedXmlValue(spec, value)))))
+        }
+        val hash = valueHash(spec.type, value)
+        snapshots.save("settings", conflict.name, EsdeSharedSnapshot(hash, hash))
     }
 
     private fun readProfile(): EsdeSharedSettingsProfile {

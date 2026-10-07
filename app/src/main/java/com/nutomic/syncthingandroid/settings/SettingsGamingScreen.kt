@@ -346,7 +346,7 @@ fun SettingsGamingScreen() {
     )
     if (showRomFolder) FolderRoleDialog(
         title = "ROM / gamelist sync folder",
-        folders = api?.folders.orEmpty(),
+        folders = api?.folders.orEmpty().filter { it.id != sharedStateFolder },
         selected = romFolder,
         primaryDevice = primaryDevice,
         onSelect = { id ->
@@ -359,7 +359,7 @@ fun SettingsGamingScreen() {
                 (context as Activity).runOnUiThread {
                     val message = when {
                         result.checked == 0 -> "The assigned ROM folder is unavailable; no ignore list was changed."
-                        result.conflicting > 0 -> "ROM folder assigned, but its gamelist.xml rule needs manual review."
+                        result.conflicting > 0 || result.failed > 0 -> "ROM folder assigned, but its gamelist.xml protection could not be verified. Retry."
                         else -> "ROM folder assigned and gamelist.xml protected; ${result.updated} ignore list updated."
                     }
                     Toast.makeText(context, message, Toast.LENGTH_LONG).show()
@@ -370,7 +370,7 @@ fun SettingsGamingScreen() {
     )
     if (showSharedStateFolder) FolderRoleDialog(
         title = "ES-DE Settings & Collections sync folder",
-        folders = api?.folders.orEmpty(),
+        folders = api?.folders.orEmpty().filter { it.id != romFolder },
         selected = sharedStateFolder,
         primaryDevice = primaryDevice,
         onSelect = { id ->
@@ -381,7 +381,7 @@ fun SettingsGamingScreen() {
             showSharedStateFolder = false
             api?.let { rest -> EsdeIgnoreRuleManager(rest).ensureSharedState(id) { result ->
                 (context as Activity).runOnUiThread {
-                    Toast.makeText(context, if (result.failed > 0) "Shared-state folder assigned, but its ignore list could not be updated." else "Shared-state folder assigned and isolated from raw ES-DE files.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, if (result.failed > 0 || result.checked == 0) "Shared-state folder protection could not be verified. Check the folder and Retry." else "Shared-state folder assigned and isolated from raw ES-DE files; only .esde-sync-global is synchronized.", Toast.LENGTH_LONG).show()
                 }
             } }
         },

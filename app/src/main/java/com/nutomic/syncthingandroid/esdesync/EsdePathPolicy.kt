@@ -25,6 +25,7 @@ object EsdePathPolicy {
     fun sidecarFile(systemDirectory: File, rawGamePath: String): File {
         val normalized = normalizeGamePath(rawGamePath).removePrefix("./")
         val sidecarRoot = File(systemDirectory, EsdeSidecarStore.SIDECAR_DIRECTORY)
+        require(sidecarRoot.canonicalFile.parentFile == systemDirectory.canonicalFile) { "Sidecar directory escaped its system root" }
         val result = File(sidecarRoot, "$normalized${EsdeSidecarStore.SIDECAR_SUFFIX}")
         val rootPath = sidecarRoot.canonicalPath.trimEnd(File.separatorChar) + File.separator
         require(result.canonicalPath.startsWith(rootPath)) { "Sidecar escaped its system root" }

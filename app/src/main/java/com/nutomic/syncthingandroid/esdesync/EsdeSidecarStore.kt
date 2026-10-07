@@ -2,6 +2,7 @@ package com.nutomic.syncthingandroid.esdesync
 
 import com.google.gson.Gson
 import com.google.gson.JsonParseException
+import com.google.gson.JsonParser
 import java.io.File
 import java.io.OutputStreamWriter
 import java.nio.charset.StandardCharsets
@@ -33,6 +34,8 @@ class EsdeSidecarStore(private val gson: Gson = Gson()) {
             updatedAt = utcNow(),
         )
         val json = gson.toJson(state) + "\n"
+        EsdeMetadataValidation.validate(state)
+        require(json.toByteArray(StandardCharsets.UTF_8).size <= MAX_JSON_BYTES) { "Sidecar exceeds size limit" }
         val old = if (target.isFile && target.length() <= MAX_JSON_BYTES) {
             runCatching { read(target) }.getOrNull()
         } else null
@@ -45,11 +48,40 @@ class EsdeSidecarStore(private val gson: Gson = Gson()) {
 
     fun read(file: File): EsdeGameState {
         if (!file.isFile || file.length() > MAX_JSON_BYTES) throw JsonParseException("Invalid sidecar size")
-        val state = file.reader(StandardCharsets.UTF_8).use { gson.fromJson(it, EsdeGameState::class.java) }
+        val text = file.reader(StandardCharsets.UTF_8).use { reader ->
+            val buffer = CharArray(MAX_JSON_BYTES.toInt() + 1)
+            var size = 0
+            while (size < buffer.size) {
+                val n = reader.read(buffer, size, buffer.size - size)
+                if (n < 0) break
+                size += n
+            }
+            if (size > MAX_JSON_BYTES) throw JsonParseException("Sidecar grew beyond size limit")
+            String(buffer, 0, size)
+        }
+        if (text.toByteArray(StandardCharsets.UTF_8).size > MAX_JSON_BYTES) throw JsonParseException("Invalid sidecar size")
+        val json = JsonParser.parseString(text).takeIf { it.isJsonObject }?.asJsonObject
+            ?: throw JsonParseException("Sidecar must be an object")
+        for (name in listOf("schemaVersion", "playcount", "playtime")) json[name]?.takeUnless { it.isJsonNull }?.let {
+            if (!it.isJsonPrimitive || !it.asJsonPrimitive.isNumber || !it.asString.matches(Regex("[0-9]+")) || it.asString.toLongOrNull() == null)
+                throw JsonParseException("$name must be a non-negative integer")
+        }
+        for (name in listOf("favorite", "completed")) json[name]?.takeUnless { it.isJsonNull }?.let {
+            if (!it.isJsonPrimitive || !it.asJsonPrimitive.isBoolean) throw JsonParseException("$name must be a boolean")
+        }
+        for (name in listOf("game", "lastplayed", "altemulator", "players", "updatedAt")) json[name]?.takeUnless { it.isJsonNull }?.let {
+            if (!it.isJsonPrimitive || !it.asJsonPrimitive.isString) throw JsonParseException("$name must be a string")
+        }
+        json["rating"]?.takeUnless { it.isJsonNull }?.let {
+            if (!it.isJsonPrimitive || !it.asJsonPrimitive.isNumber) throw JsonParseException("rating must be numeric")
+        }
+        val state = gson.fromJson(json, EsdeGameState::class.java)
             ?: throw JsonParseException("Empty sidecar")
         if (state.schemaVersion != EsdeGameState.SCHEMA_VERSION) {
             throw JsonParseException("Unsupported schemaVersion ${state.schemaVersion}")
         }
+        try { EsdeMetadataValidation.validate(state) }
+        catch (error: IllegalArgumentException) { throw JsonParseException(error.message, error) }
         val normalized = try {
             EsdePathPolicy.normalizeGamePath(state.game)
         } catch (error: IllegalArgumentException) {
@@ -71,11 +103,15 @@ class EsdeSidecarStore(private val gson: Gson = Gson()) {
     fun scan(systemDirectory: File): ScanResult {
         val root = File(systemDirectory, SIDECAR_DIRECTORY)
         if (!root.isDirectory) return ScanResult(linkedMapOf(), 0, 0)
-        val files = root.walkTopDown().filter { it.isFile && it.name.endsWith(SIDECAR_SUFFIX) }
+        require(root.canonicalFile.parentFile == systemDirectory.canonicalFile) { "Sidecar directory escaped its system root" }
+        val files = root.walkTopDown().onEnter { directory ->
+            directory.parentFile?.let { directory.canonicalFile == File(it.canonicalFile, directory.name) } == true
+        }.onFail { _, error -> throw error }.filter { it.isFile && it.name.endsWith(SIDECAR_SUFFIX) }
         val states = LinkedHashMap<String, EsdeMetadata>()
         var total = 0
         var invalid = 0
         files.forEach { file ->
+            require(total < 500_000) { "Sidecar scan limit exceeded" }
             total++
             try {
                 val state = read(file)

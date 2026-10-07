@@ -338,6 +338,10 @@ fun SettingsGamingFirstSetupScreen() {
             }
             4 -> {
                 item { SetupHeading("Automatic safety checks") }
+                item { Preference(title = { Text("Close ES-DE before applying changes") }, summary = { Text("Save and close the emulator first. Open ES-DE app info, choose Force stop, then return here. Android does not allow SafeSync to reliably close another app itself.") }, onClick = {
+                    runCatching { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${settings.applicationPackage}"))) }
+                        .onFailure { feedback = "Open Android Settings → Apps → ES-DE → Force stop." }
+                }) }
                 item { Preference(title = { Text("Apply and validate protection") }, summary = { Text("Protects gamelist.xml only in the assigned ROM folder and, when enabled, allows only .esde-sync-global in the separate Settings & Collections folder.") }, enabled = coreComplete, onClick = ::validateAndApply) }
                 if (feedback.isNotBlank()) item { Preference(title = { Text("Result") }, summary = { Text(feedback) }) }
                 if (role == EsdeSyncSettings.ROLE_SOURCE) item {
@@ -350,6 +354,8 @@ fun SettingsGamingFirstSetupScreen() {
                             coordinator.initializeFromThisDevice { result ->
                                 if (result.blockedByExistingSidecars) {
                                     feedback = "Existing sidecars found; source initialization was safely blocked."
+                                } else if (!result.export.successful) {
+                                    feedback = result.export.errors.joinToString("; ")
                                 } else if (result.export.gamesRead == 0) {
                                     feedback = "No games were found. Check the gamelist root before using this device as the initial source."
                                 } else {
@@ -377,7 +383,7 @@ fun SettingsGamingFirstSetupScreen() {
                 item { Preference(title = { Text("Android background protection") }, summary = { Text("Set battery use to Unrestricted and disable Pause app activity if unused so final synchronization can finish.") }, onClick = {
                     context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
                 }) }
-                item { Preference(title = { Text("After every play session") }, summary = { Text("Close the emulator, return to ES-DE, press Home, keep SafeSync open and wait for SAFE TO SWITCH DEVICE before changing handhelds or powering off.") }) }
+                item { Preference(title = { Text("After every play session") }, summary = { Text("Save and close the emulator, return to ES-DE, then press Home. Follow the ES-DE Force stop instructions if prompted. Keep SafeSync open until SAFE TO SWITCH DEVICE before changing handhelds or powering off.") }) }
                 item { Preference(title = { Text(if (canFinish) "Ready to finish" else "Setup incomplete") }, summary = { Text(when {
                     !coreComplete -> "Select ES-DE, both directories, a primary device, the ROM folder and all required Gaming Sync Folders. Select a separate shared-state folder only when that optional feature is enabled."
                     role == EsdeSyncSettings.ROLE_SOURCE && !sourceInitialized -> "Create the initial metadata source on the Safety step before finishing."
@@ -419,7 +425,7 @@ fun SettingsGamingFirstSetupScreen() {
         }, onDismiss = { showFolders = false },
     )
     if (showRomFolder) FolderRoleDialog(
-        title = "ROM / gamelist sync folder", folders = api?.folders.orEmpty(), selected = romFolder, primaryDevice = primaryDevice,
+        title = "ROM / gamelist sync folder", folders = api?.folders.orEmpty().filter { it.id != sharedStateFolder }, selected = romFolder, primaryDevice = primaryDevice,
         onSelect = {
             romFolder = it
             settings.romFolderId = it
@@ -429,7 +435,7 @@ fun SettingsGamingFirstSetupScreen() {
         }, onDismiss = { showRomFolder = false },
     )
     if (showSharedStateFolder) FolderRoleDialog(
-        title = "ES-DE Settings & Collections sync folder", folders = api?.folders.orEmpty(), selected = sharedStateFolder, primaryDevice = primaryDevice,
+        title = "ES-DE Settings & Collections sync folder", folders = api?.folders.orEmpty().filter { it.id != romFolder }, selected = sharedStateFolder, primaryDevice = primaryDevice,
         onSelect = {
             sharedStateFolder = it
             settings.sharedStateFolderId = it

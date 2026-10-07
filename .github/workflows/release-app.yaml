@@ -67,8 +67,9 @@ jobs:
     with:
       applicationId: 'com.github.danielgimmer.syncthingesdesync'
       buildType: 'release'
-      environmentName: 'dev-sign-untrusted'
-      usePublicTestKey: true
+      environmentName: ${{ vars.SAFESYNC_PRIVATE_SIGNING == 'true' && 'release-signing' || 'dev-sign-untrusted' }}
+      usePublicTestKey: ${{ vars.SAFESYNC_PRIVATE_SIGNING != 'true' }}
+    secrets: inherit
 
   publish:
     name: Publish GitHub release
@@ -91,6 +92,7 @@ jobs:
       - name: Create checksums and release notes
         env:
           REQUESTED_SYNCTHING_TAG: ${{ inputs.syncthingTag }}
+          PRIVATE_SIGNING: ${{ vars.SAFESYNC_PRIVATE_SIGNING }}
         run: |
           set -eu
           cd artifacts
@@ -107,7 +109,11 @@ jobs:
             echo ""
             echo "Enthaltene Syncthing-Version: ${SYNCTHING_TAG}"
             echo ""
-            echo "Die APK wurde automatisch mit dem stabilen, öffentlichen Testschlüssel signiert. Sie ist für persönliche Installationen und automatische Updates geeignet, aber kein vertrauenswürdiger Store-/Produktionsbuild."
+            if [ "$PRIVATE_SIGNING" = "true" ]; then
+              echo "Die APK nutzt ab Android 9 den privaten Release-Schlüssel mit Signaturhistorie für bestehende Installationen. Ältere Android-Versionen benötigen aus Kompatibilitätsgründen weiterhin den öffentlichen Testschlüssel."
+            else
+              echo "Die APK wurde mit dem öffentlichen, nicht vertrauenswürdigen Testschlüssel signiert. Die private Signaturmigration wurde noch nicht aktiviert."
+            fi
             echo ""
             echo "Prüfsummen stehen in SHA256SUMS.txt."
           } > "${RUNNER_TEMP}/release-notes.md"
